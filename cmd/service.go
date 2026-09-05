@@ -15,17 +15,39 @@ type program struct {
 	// args []string
 }
 
+var customServiceName string
+
 func newSVCConfig() *service.Config {
 	var logOutput = false
 	if logFile != "" {
 		logOutput = true
 	}
 
+	name := customServiceName
+	if name == "" {
+		if iface != "" {
+			name = "HustWebAuth_" + iface
+		} else {
+			name = "HustWebAuth"
+		}
+	}
+
+	args := []string{"service"}
+	if cfgFile != "" {
+		args = append(args, "-f", cfgFile)
+	}
+	if iface != "" {
+		args = append(args, "-i", iface)
+	}
+	if customServiceName != "" {
+		args = append(args, "--name", customServiceName)
+	}
+
 	c := &service.Config{
-		Name:        "HustWebAuth",
-		DisplayName: "HustWebAuth",
+		Name:        name,
+		DisplayName: name,
 		Description: "A service used to implement Ruijie web authentication.",
-		Arguments:   []string{"service"},
+		Arguments:   args,
 		EnvVars:     map[string]string{"HOME": homeDir},
 		Option:      service.KeyValue{"LogOutput": logOutput, "LogDirectory": logDir},
 	}
@@ -232,6 +254,7 @@ var (
 
 func init() {
 	rootCmd.AddCommand(serviceCmd)
+	serviceCmd.PersistentFlags().StringVar(&customServiceName, "name", "", "Custom service name (default HustWebAuth or HustWebAuth_<iface>)")
 	serviceCmd.AddCommand(installCmd, startCmd, statusCmd, stopCmd, restartCmd, uninstallCmd)
 }
 

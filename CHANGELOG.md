@@ -6,7 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Nothing right now.
+### Added
+
+1. Add `-i, --iface` flag to support binding to specific network interface or IP for single-line multi-dial (单线多拨).
+2. Add multi-account rotation support (`auth.accounts` and comma-separated accounts/passwords).
+3. Add exponential backoff cooldown mechanism for failed and kicked-offline accounts (`--cooldown`, `--maxCooldown`).
+4. Add `--name` flag to `service` command to allow custom service naming for multi-instance deployments.
+5. Add multi-interface concurrent worker mode via `interfaces` configuration in YAML.
+
+### Changed
+
+1. Enhance network layer with Linux `SO_BINDTODEVICE` (`unix.BindToDevice`) and LocalAddr binding.
+2. Fix potential index-out-of-range panics in cookie extraction and redirect URL parsing.
+3. Update README.md with multi-dial, account rotation, and service documentation.
 
 ## [1.1.4] - 2023.06.14 更新
 

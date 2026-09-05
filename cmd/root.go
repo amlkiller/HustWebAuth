@@ -24,12 +24,14 @@ THE SOFTWARE.
 package cmd
 
 import (
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	daemon "github.com/sevlyar/go-daemon"
@@ -38,28 +40,48 @@ import (
 )
 
 var (
-	cfgFile       string
-	account       string
-	password      string
-	serviceType   string
-	encrypt       bool
-	pingIP        string
-	pingCount     int
-	pingTimeout   time.Duration
-	pingPrivilege bool
-	redirectURL   string
-	logDir        string
-	logFile       string
-	logRandom     bool
-	logAppend     bool
-	sysLog        bool
-	saveCfg       bool
-	daemonEnable  bool
-	daemonPidFile string
-	cycleEnable   bool
-	cycleDuration time.Duration
-	cycleRetry    int
-	logConnected  bool
+	cfgFile        string
+	account        string
+	password       string
+	serviceType    string
+	encrypt        bool
+	iface          string
+	cooldown       time.Duration
+	maxCooldown    time.Duration
+	rotationEnable bool
+	pingIP         string
+	pingCount      int
+	pingTimeout    time.Duration
+	pingPrivilege  bool
+	redirectURL    string
+	logDir         string
+	logFile        string
+	logRandom      bool
+	logAppend      bool
+	sysLog         bool
+	saveCfg        bool
+	daemonEnable   bool
+	daemonPidFile  string
+	cycleEnable    bool
+	cycleDuration  time.Duration
+	cycleRetry     int
+	logConnected   bool
+)
+
+// InterfaceConfig holds configuration for an individual network interface worker.
+type InterfaceConfig struct {
+	Iface       string        `json:"iface" yaml:"iface" mapstructure:"iface"`
+	PingIP      string        `json:"pingIP,omitempty" yaml:"pingIP,omitempty" mapstructure:"pingIP"`
+	Accounts    []Account     `json:"accounts,omitempty" yaml:"accounts,omitempty" mapstructure:"accounts"`
+	Cooldown    time.Duration `json:"cooldown,omitempty" yaml:"cooldown,omitempty" mapstructure:"cooldown"`
+	MaxCooldown time.Duration `json:"maxCooldown,omitempty" yaml:"maxCooldown,omitempty" mapstructure:"maxCooldown"`
+}
+
+var (
+	configuredAccounts   []Account
+	configuredInterfaces []InterfaceConfig
+	globalAccountPool    *AccountPool
+	poolOnce             sync.Once
 )
 
 var execPath = getCurrentAbPath()
@@ -73,11 +95,59 @@ var rootCmd = &cobra.Command{
 	Use:   filenameWithSuffix,
 	Short: "A program used to implement Ruijie web authentication",
 	Long:  `HustWebAuth is a program used to implement Ruijie web authentication.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// Validate that at least one account or interface is configured
+		accounts := getEffectiveAccounts()
+		if len(accounts) == 0 && len(configuredInterfaces) == 0 {
+			return fmt.Errorf("no authentication account configured; specify via -a/--account or config file")
+		}
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		runDaemon()
 	},
+}
+
+func getEffectiveAccounts() []Account {
+	if account != "" {
+		accList := strings.Split(account, ",")
+		pwdList := strings.Split(password, ",")
+		var list []Account
+		for i, a := range accList {
+			a = strings.TrimSpace(a)
+			if a == "" {
+				continue
+			}
+			p := ""
+			if i < len(pwdList) {
+				p = strings.TrimSpace(pwdList[i])
+			} else if len(pwdList) > 0 {
+				p = strings.TrimSpace(pwdList[len(pwdList)-1])
+			}
+			enc := encrypt
+			list = append(list, Account{
+				Account:     a,
+				Password:    p,
+				ServiceType: serviceType,
+				Encrypt:     &enc,
+			})
+		}
+		return list
+	}
+
+	if len(configuredAccounts) > 0 {
+		return configuredAccounts
+	}
+
+	return nil
+}
+
+func getDefaultAccountPool() *AccountPool {
+	poolOnce.Do(func() {
+		accounts := getEffectiveAccounts()
+		globalAccountPool = NewAccountPool(accounts, cooldown, maxCooldown)
+	})
+	return globalAccountPool
 }
 
 func runDaemon() {
@@ -90,10 +160,18 @@ func runDaemon() {
 			if _, err := os.Stat(tmpDir); os.IsNotExist(err) {
 				os.Mkdir(tmpDir, fs.ModeDir)
 			}
-			logFile = filepath.Join(tmpDir, filenameWithSuffix+".log")
+			logSuffix := filenameWithSuffix
+			if iface != "" {
+				logSuffix += "_" + iface
+			}
+			logFile = filepath.Join(tmpDir, logSuffix+".log")
 		}
 		if daemonPidFile == "" {
-			daemonPidFile = "/var/run/" + filenameWithSuffix + "_daemon.pid"
+			pidSuffix := filenameWithSuffix
+			if iface != "" {
+				pidSuffix += "_" + iface
+			}
+			daemonPidFile = "/var/run/" + pidSuffix + "_daemon.pid"
 		}
 		cntxt := &daemon.Context{
 			PidFileName: daemonPidFile,
@@ -102,7 +180,6 @@ func runDaemon() {
 			LogFilePerm: 0644,
 		}
 
-		// Reborn()返回 子进程为nil 父进程不为nil
 		child, err := cntxt.Reborn()
 		if err != nil {
 			log.Fatal("Unable to run: ", err)
@@ -125,48 +202,82 @@ func runDaemon() {
 func runCycle() {
 	log.Println("- - - - - - - - - - - - - - - - - - -")
 	log.Println("HustWebAuth started.")
+
+	// Multi-interface concurrent mode: If multiple interfaces configured in YAML and no specific -i flag passed
+	if iface == "" && len(configuredInterfaces) > 0 {
+		log.Printf("Starting multi-interface concurrent mode for %d interfaces...\n", len(configuredInterfaces))
+		var wg sync.WaitGroup
+		for _, ifcConfig := range configuredInterfaces {
+			wg.Add(1)
+			go func(cfg InterfaceConfig) {
+				defer wg.Done()
+				runSingleWorker(cfg)
+			}(ifcConfig)
+		}
+		wg.Wait()
+		return
+	}
+
+	// Single interface worker mode
+	defaultCfg := InterfaceConfig{
+		Iface:       iface,
+		Accounts:    getEffectiveAccounts(),
+		Cooldown:    cooldown,
+		MaxCooldown: maxCooldown,
+	}
+	runSingleWorker(defaultCfg)
+}
+
+func runSingleWorker(cfg InterfaceConfig) {
+	tag := ifaceTag(cfg.Iface)
+	pool := NewAccountPool(cfg.Accounts, cfg.Cooldown, cfg.MaxCooldown)
+
+	log.Printf("[%s] Worker initialized with %d account(s), base cooldown: %s, max cooldown: %s\n",
+		tag, pool.AccountsCount(), cfg.Cooldown, cfg.MaxCooldown)
+
 	retryCount := 0
-	res, err := Login()
+	res, err := LoginWithInterface(cfg.Iface, pool, register)
 	if err != nil {
 		if cycleEnable {
 			if cycleRetry < 0 {
-				log.Println("Login failed, Err: ", err)
-				log.Println("Login retrying...")
+				log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+				log.Printf("[%s] Login retrying...\n", tag)
 			} else if retryCount < cycleRetry {
 				retryCount++
-				log.Println("Login failed, Err: ", err)
-				log.Println("Login retry ", strconv.Itoa(retryCount), "times after "+cycleDuration.String())
+				log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+				log.Printf("[%s] Login retry %d times after %s\n", tag, retryCount, cycleDuration)
 			} else {
-				log.Fatal("Login failed, Err: ", err)
+				log.Fatalf("[%s] Login failed, Err: %v\n", tag, err)
 			}
 		} else {
-			log.Fatal("Login failed, Err: ", err)
+			log.Fatalf("[%s] Login failed, Err: %v\n", tag, err)
 		}
 	}
 	if res != "" {
-		log.Println(res)
+		log.Printf("[%s] %s\n", tag, res)
 	}
 
 	if cycleEnable {
 		eventsTick := time.NewTicker(cycleDuration)
 		defer eventsTick.Stop()
 		for range eventsTick.C {
-			res, err := Login()
+			res, err := LoginWithInterface(cfg.Iface, pool, false)
 			if err != nil {
 				if cycleRetry < 0 {
-					log.Println("Login failed, Err: ", err)
-					log.Println("Login retrying...")
+					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+					log.Printf("[%s] Login retrying...\n", tag)
 				} else if retryCount < cycleRetry {
 					retryCount++
-					log.Println("Login failed, Err: ", err)
-					log.Println("Login retry", strconv.Itoa(retryCount), "times after", cycleDuration.String())
+					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+					log.Printf("[%s] Login retry %d times after %s\n", tag, retryCount, cycleDuration)
 				} else {
-					log.Println("Login failed, Err: ", err)
-					log.Fatal("Exceed the maximum number of retries, daemon stopped!")
+					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+					log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
+					return
 				}
 			} else {
 				if res != "" {
-					log.Println(res)
+					log.Printf("[%s] %s\n", tag, res)
 				}
 				retryCount = 0
 			}
@@ -175,7 +286,6 @@ func runCycle() {
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
@@ -189,15 +299,15 @@ func init() {
 	cobra.OnInitialize(initLog)
 	cobra.OnFinalize(saveConfig)
 
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "f", "", "Config file (default is $HOME/HustWebAuth.yaml)")
-	rootCmd.PersistentFlags().StringVarP(&account, "account", "a", "", "Account for ruijie web authentication")
-	rootCmd.PersistentFlags().StringVarP(&password, "password", "p", "", "Password for ruijie web authentication")
+	rootCmd.PersistentFlags().StringVarP(&account, "account", "a", "", "Account(s) for authentication (comma-separated for multi-account)")
+	rootCmd.PersistentFlags().StringVarP(&password, "password", "p", "", "Password(s) for authentication (comma-separated)")
 	rootCmd.PersistentFlags().StringVarP(&serviceType, "serviceType", "s", "internet", "Service type, options: [internet, local]")
 	rootCmd.PersistentFlags().BoolVarP(&encrypt, "encrypt", "e", false, "Password is encrypted or not (default false)")
+	rootCmd.PersistentFlags().StringVarP(&iface, "iface", "i", "", "Network interface or IP address to bind (e.g. eth0, vwan1, 10.0.0.2)")
+	rootCmd.PersistentFlags().DurationVar(&cooldown, "cooldown", 10*time.Minute, "Base cooldown duration for exponential backoff")
+	rootCmd.PersistentFlags().DurationVar(&maxCooldown, "maxCooldown", 2*time.Hour, "Max cooldown duration for exponential backoff")
+	rootCmd.PersistentFlags().BoolVar(&rotationEnable, "rotation", true, "Enable multi-account rotation")
 
 	rootCmd.PersistentFlags().StringVar(&pingIP, "pingIP", "202.114.0.131", "IP address to ping")
 	rootCmd.PersistentFlags().IntVar(&pingCount, "pingCount", 3, "ping count")
@@ -221,13 +331,15 @@ NOTE: setting to true requires that it be run with super-user privileges.
 	rootCmd.Flags().DurationVar(&cycleDuration, "cycleDuration", 5*time.Minute, "Cycle duration")
 	rootCmd.Flags().IntVar(&cycleRetry, "cycleRetry", 3, "Cycle retry times, -1 means retry forever")
 
-	rootCmd.MarkFlagRequired("account")
-	rootCmd.MarkFlagRequired("password")
-
+	viper.BindPFlag("net.iface", rootCmd.PersistentFlags().Lookup("iface"))
 	viper.BindPFlag("auth.account", rootCmd.PersistentFlags().Lookup("account"))
 	viper.BindPFlag("auth.password", rootCmd.PersistentFlags().Lookup("password"))
 	viper.BindPFlag("auth.serviceType", rootCmd.PersistentFlags().Lookup("serviceType"))
 	viper.BindPFlag("auth.encrypt", rootCmd.PersistentFlags().Lookup("encrypt"))
+	viper.BindPFlag("auth.cooldown", rootCmd.PersistentFlags().Lookup("cooldown"))
+	viper.BindPFlag("auth.maxCooldown", rootCmd.PersistentFlags().Lookup("maxCooldown"))
+	viper.BindPFlag("auth.rotation", rootCmd.PersistentFlags().Lookup("rotation"))
+
 	viper.BindPFlag("ping.ip", rootCmd.PersistentFlags().Lookup("pingIP"))
 	viper.BindPFlag("ping.count", rootCmd.PersistentFlags().Lookup("pingCount"))
 	viper.BindPFlag("ping.timeout", rootCmd.PersistentFlags().Lookup("pingTimeout"))
@@ -246,10 +358,6 @@ NOTE: setting to true requires that it be run with super-user privileges.
 	viper.BindPFlag("cycle.retry", rootCmd.Flags().Lookup("cycleRetry"))
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	// rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
 func initHomeDir() {
@@ -264,33 +372,85 @@ func initHomeDir() {
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
 	if cfgFile != "" {
-		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// ex, err := os.Executable()
-		// if err != nil {
-		// 	log.Panic(err)
-		// }
-		// exDir := filepath.Dir(ex)
-		// viper.AddConfigPath(exDir)
-
-		// Search config in home directory with name "HustWebAuth" (without extension).
 		viper.AddConfigPath(homeDir)
 		cfgFile = filepath.Join(homeDir, "HustWebAuth.yaml")
-
 		viper.SetConfigType("yaml")
 		viper.SetConfigName("HustWebAuth")
 	}
 
-	viper.AutomaticEnv() // read in environment variables that match
+	viper.AutomaticEnv()
 
-	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
 		log.Println("Using config file: " + viper.ConfigFileUsed())
-		account = viper.GetString("auth.account")
-		password = viper.GetString("auth.password")
-		serviceType = viper.GetString("auth.serviceType")
-		encrypt = viper.GetBool("auth.encrypt")
+
+		if viper.IsSet("net.iface") && iface == "" {
+			iface = viper.GetString("net.iface")
+		}
+
+		if account == "" {
+			account = viper.GetString("auth.account")
+		}
+		if password == "" {
+			password = viper.GetString("auth.password")
+		}
+		if !rootCmd.PersistentFlags().Lookup("serviceType").Changed && viper.IsSet("auth.serviceType") {
+			serviceType = viper.GetString("auth.serviceType")
+		}
+		if !rootCmd.PersistentFlags().Lookup("encrypt").Changed && viper.IsSet("auth.encrypt") {
+			encrypt = viper.GetBool("auth.encrypt")
+		}
+		if !rootCmd.PersistentFlags().Lookup("cooldown").Changed && viper.IsSet("auth.cooldown") {
+			cooldown = viper.GetDuration("auth.cooldown")
+		}
+		if !rootCmd.PersistentFlags().Lookup("maxCooldown").Changed && viper.IsSet("auth.maxCooldown") {
+			maxCooldown = viper.GetDuration("auth.maxCooldown")
+		}
+		if !rootCmd.PersistentFlags().Lookup("rotation").Changed && viper.IsSet("auth.rotation") {
+			rotationEnable = viper.GetBool("auth.rotation")
+		}
+
+		// Load multi-accounts list from auth.accounts
+		if viper.IsSet("auth.accounts") {
+			var accs []Account
+			if err := viper.UnmarshalKey("auth.accounts", &accs); err == nil {
+				configuredAccounts = accs
+			}
+		}
+
+		// If no accounts array was loaded but single account exists in YAML, create slice
+		if len(configuredAccounts) == 0 && account != "" {
+			enc := encrypt
+			configuredAccounts = []Account{
+				{
+					Account:     account,
+					Password:    password,
+					ServiceType: serviceType,
+					Encrypt:     &enc,
+				},
+			}
+		}
+
+		// Load multi-interfaces list from interfaces
+		if viper.IsSet("interfaces") {
+			var ifcs []InterfaceConfig
+			if err := viper.UnmarshalKey("interfaces", &ifcs); err == nil {
+				for i := range ifcs {
+					if ifcs[i].Cooldown <= 0 {
+						ifcs[i].Cooldown = cooldown
+					}
+					if ifcs[i].MaxCooldown <= 0 {
+						ifcs[i].MaxCooldown = maxCooldown
+					}
+					if len(ifcs[i].Accounts) == 0 {
+						ifcs[i].Accounts = configuredAccounts
+					}
+				}
+				configuredInterfaces = ifcs
+			}
+		}
+
 		pingIP = viper.GetString("ping.ip")
 		pingCount = viper.GetInt("ping.count")
 		pingTimeout = viper.GetDuration("ping.timeout")

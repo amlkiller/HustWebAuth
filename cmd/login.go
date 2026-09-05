@@ -7,10 +7,12 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -27,77 +29,107 @@ var loginCmd = &cobra.Command{
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Println(res)
+		if res != "" {
+			log.Println(res)
+		}
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(loginCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// Cmd.PersistentFlags().String("foo", "", "A help for foo")
 	loginCmd.PersistentFlags().BoolVarP(&register, "register", "r", false, "Register Mac address")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// loginCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
-// Get cookie of the auth page
+func ifaceTag(ifaceName string) string {
+	if ifaceName == "" {
+		return "Default"
+	}
+	return ifaceName
+}
+
+// GetCookie gets cookie of the auth page using the default client.
 func GetCookie(url string) (*http.Cookie, error) {
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 5 * time.Second}
+	return GetCookieWithClient(client, url)
+}
+
+// GetCookieWithClient gets cookie of the auth page using the specified client.
+func GetCookieWithClient(client *http.Client, url string) (*http.Cookie, error) {
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	cookie := resp.Cookies()[0]
-	return cookie, err
+	cookies := resp.Cookies()
+	if len(cookies) == 0 {
+		return nil, nil
+	}
+	return cookies[0], nil
 }
 
-// Login to auth the network
-func login(url string, queryString string, account string, password string, serviceType string, encrypt bool, cookie *http.Cookie) (string, error) {
+// login performs the HTTP post request to eportal login interface.
+func loginWithClient(client *http.Client, url string, queryString string, acc Account, cookie *http.Cookie) (string, error) {
 	trueurl := strings.Split(url, "/eportal/")[0] + "/eportal/InterFace.do?method=login"
 
-	client := &http.Client{}
-	var req *http.Request
 	var passwordEncrypt string
-	if encrypt {
+	isEncrypt := encrypt
+	if acc.Encrypt != nil {
+		isEncrypt = *acc.Encrypt
+	}
+	if isEncrypt {
 		passwordEncrypt = "true"
 	} else {
 		passwordEncrypt = "false"
 	}
-	data := "userId=" + account +
-		"&password=" + password +
-		"&service=" + serviceType +
+
+	svcType := serviceType
+	if acc.ServiceType != "" {
+		svcType = acc.ServiceType
+	}
+
+	data := "userId=" + acc.Account +
+		"&password=" + acc.Password +
+		"&service=" + svcType +
 		"&queryString=" + queryString +
 		"&operatorPwd=&operatorUserId=&validcode=&passwordEncrypt=" + passwordEncrypt
-	req, _ = http.NewRequest("POST", trueurl, strings.NewReader(data))
-	req.AddCookie(cookie)
+
+	req, err := http.NewRequest("POST", trueurl, strings.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
 
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36")
 
 	resp, err := client.Do(req)
-
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	return string(body), err
 }
 
-// RegisterMAC register the mac address, only for the first time
+// RegisterMAC registers the mac address, only for the first time.
 func RegisterMAC(url string, userIndex string, cookie *http.Cookie) (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	return RegisterMACWithClient(client, url, userIndex, cookie)
+}
+
+// RegisterMACWithClient registers the mac address using the specified client.
+func RegisterMACWithClient(client *http.Client, url string, userIndex string, cookie *http.Cookie) (string, error) {
 	trueurl := strings.Split(url, "/eportal/")[0] + "/eportal/InterFace.do?method=registerMac"
-	client := &http.Client{}
-	var req *http.Request
 	data := "mac=&userIndex=" + userIndex
-	req, _ = http.NewRequest("POST", trueurl, strings.NewReader(data))
-	req.AddCookie(cookie)
+	req, err := http.NewRequest("POST", trueurl, strings.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
 
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36")
@@ -107,53 +139,106 @@ func RegisterMAC(url string, userIndex string, cookie *http.Cookie) (string, err
 		return "", err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return string(body), nil
+	body, err := io.ReadAll(resp.Body)
+	return string(body), err
 }
 
-// Hust web auth once.
+// Login performs Ruijie web auth once using default pool and interface.
 func Login() (res string, err error) {
-	url, queryString, connected, err := GetLoginUrl()
+	pool := getDefaultAccountPool()
+	return LoginWithInterface(iface, pool, register)
+}
+
+// LoginWithInterface handles ping detection, kicked-out exponential backoff, and multi-account rotation on a specific interface.
+func LoginWithInterface(ifaceName string, pool *AccountPool, doRegister bool) (res string, err error) {
+	url, queryString, connected, err := GetLoginUrlWithInterface(ifaceName)
 	if err != nil {
 		return "", err
 	}
+
 	if connected {
+		pool.ConfirmConnected()
 		if logConnected {
 			return "The network is connected, no authentication required", nil
 		}
 		return "", nil
 	}
 
-	cookie, err := GetCookie(url)
-	if err != nil {
-		return "", err
+	// If network was previously connected, but now disconnected -> kicked offline!
+	if pool.WasConnected() {
+		pool.MarkKicked()
 	}
 
-	login_res, err := login(url, queryString, account, password, serviceType, encrypt, cookie)
+	client, err := NewHTTPClient(ifaceName, 10*time.Second)
 	if err != nil {
-		return "", err
-	}
-	if len(strings.Split(login_res, "\"result\":\"success\"")) == 2 {
-		res = "Login success!"
-	} else {
-		return "", errors.New("Login fail: " + login_res)
+		return "", fmt.Errorf("[%s] failed to create HTTP client: %w", ifaceTag(ifaceName), err)
 	}
 
-	if register {
-		var resJson map[string]interface{}
-		err = json.Unmarshal([]byte(login_res), &resJson)
-		if err == nil {
-			if userIndex, ok := resJson["userIndex"].(string); ok {
-				res, err := RegisterMAC(url, userIndex, cookie)
-				if err != nil {
-					register = false
-					return "", err
+	cookie, err := GetCookieWithClient(client, url)
+	if err != nil {
+		return "", fmt.Errorf("[%s] failed to get cookie: %w", ifaceTag(ifaceName), err)
+	}
+
+	totalAccounts := pool.AccountsCount()
+	if totalAccounts == 0 {
+		return "", errors.New("no accounts available for authentication")
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < totalAccounts; attempt++ {
+		candidate, err := pool.GetNextCandidate()
+		if err != nil {
+			return "", err // all accounts in cooldown or empty
+		}
+
+		log.Printf("[%s] Attempting login with account: %s (fail count: %d)\n",
+			ifaceTag(ifaceName), candidate.Account.Account, candidate.ConsecutiveFails)
+
+		loginRes, err := loginWithClient(client, url, queryString, candidate.Account, cookie)
+		if err != nil {
+			pool.MarkFailed(candidate, err.Error())
+			lastErr = err
+			continue
+		}
+
+		if strings.Contains(loginRes, "\"result\":\"success\"") {
+			pool.MarkActive(candidate)
+			log.Printf("[%s] Account %s login success!\n", ifaceTag(ifaceName), candidate.Account.Account)
+			res = "Login success!"
+
+			if doRegister {
+				var resJson map[string]interface{}
+				if err := json.Unmarshal([]byte(loginRes), &resJson); err == nil {
+					if userIndex, ok := resJson["userIndex"].(string); ok {
+						regRes, err := RegisterMACWithClient(client, url, userIndex, cookie)
+						if err != nil {
+							register = false
+							return "", err
+						}
+						return regRes, nil
+					}
 				}
-				return res, nil
+				register = false
+				return "Unsupport register service. ", nil
+			}
+			return res, nil
+		}
+
+		// Failed login response from Ruijie
+		failMsg := loginRes
+		var resJson map[string]interface{}
+		if err := json.Unmarshal([]byte(loginRes), &resJson); err == nil {
+			if msg, ok := resJson["message"].(string); ok && msg != "" {
+				failMsg = msg
 			}
 		}
-		register = false
-		return "Unsupport register service. ", nil
+
+		pool.MarkFailed(candidate, failMsg)
+		lastErr = fmt.Errorf("login fail (%s): %s", candidate.Account.Account, failMsg)
 	}
-	return res, nil
+
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", errors.New("all candidate accounts failed or entered cooldown")
 }
