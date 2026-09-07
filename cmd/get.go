@@ -46,13 +46,18 @@ func GetLoginUrl() (string, string, bool, error) {
 }
 
 // GetLoginUrlWithInterface gets the login url from the redirect url, bound to the given interface.
-func GetLoginUrlWithInterface(ifaceName string) (string, string, bool, error) {
+func GetLoginUrlWithInterface(ifaceName string, targetPingIP ...string) (string, string, bool, error) {
+	targetIP := pingIP
+	if len(targetPingIP) > 0 && targetPingIP[0] != "" {
+		targetIP = targetPingIP[0]
+	}
+
 	_, ip, err := ResolveInterface(ifaceName)
 	if err != nil && ifaceName != "" {
 		return "", "", false, fmt.Errorf("resolve interface %q failed: %w", ifaceName, err)
 	}
 
-	pinger, err := ping.NewPinger(pingIP)
+	pinger, err := ping.NewPinger(targetIP)
 	if err != nil {
 		return "", "", false, err
 	}

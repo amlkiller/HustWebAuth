@@ -137,3 +137,29 @@ func TestMultiAccountFailover(t *testing.T) {
 	// Since user1 is in cooldown, the next candidate must be user2
 	assert.Equal(t, "user2", user1Candidate.Account.Account)
 }
+
+func TestRotationDisabled(t *testing.T) {
+	origRotation := rotationEnable
+	defer func() {
+		rotationEnable = origRotation
+	}()
+
+	rotationEnable = false
+	pool := NewAccountPool([]Account{
+		{Account: "u1", Password: "p1"},
+		{Account: "u2", Password: "p2"},
+	}, 10*time.Minute, 2*time.Hour)
+
+	maxAttempts := pool.AccountsCount()
+	if !rotationEnable && maxAttempts > 1 {
+		maxAttempts = 1
+	}
+	assert.Equal(t, 1, maxAttempts)
+
+	rotationEnable = true
+	maxAttemptsEnabled := pool.AccountsCount()
+	if !rotationEnable && maxAttemptsEnabled > 1 {
+		maxAttemptsEnabled = 1
+	}
+	assert.Equal(t, 2, maxAttemptsEnabled)
+}

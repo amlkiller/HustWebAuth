@@ -261,7 +261,7 @@ func runSingleWorker(cfg InterfaceConfig) {
 		tag, pool.AccountsCount(), cfg.Cooldown, cfg.MaxCooldown)
 
 	retryCount := 0
-	res, err := LoginWithInterface(cfg.Iface, pool, register)
+	res, err := LoginWithInterface(cfg.Iface, pool, register, cfg.PingIP)
 	if err != nil {
 		if cycleEnable {
 			if cycleRetry < 0 {
@@ -295,7 +295,7 @@ func runSingleWorker(cfg InterfaceConfig) {
 		eventsTick := time.NewTicker(cycleDuration)
 		defer eventsTick.Stop()
 		for range eventsTick.C {
-			res, err := LoginWithInterface(cfg.Iface, pool, false)
+			res, err := LoginWithInterface(cfg.Iface, pool, false, cfg.PingIP)
 			if err != nil {
 				if cycleRetry < 0 {
 					log.Printf("[%s] Login failed, Err: %v\n", tag, err)

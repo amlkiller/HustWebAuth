@@ -150,8 +150,8 @@ func Login() (res string, err error) {
 }
 
 // LoginWithInterface handles ping detection, kicked-out exponential backoff, and multi-account rotation on a specific interface.
-func LoginWithInterface(ifaceName string, pool *AccountPool, doRegister bool) (res string, err error) {
-	url, queryString, connected, err := GetLoginUrlWithInterface(ifaceName)
+func LoginWithInterface(ifaceName string, pool *AccountPool, doRegister bool, targetPingIP ...string) (res string, err error) {
+	url, queryString, connected, err := GetLoginUrlWithInterface(ifaceName, targetPingIP...)
 	if err != nil {
 		return "", err
 	}
@@ -184,8 +184,13 @@ func LoginWithInterface(ifaceName string, pool *AccountPool, doRegister bool) (r
 		return "", errors.New("no accounts available for authentication")
 	}
 
+	maxAttempts := totalAccounts
+	if !rotationEnable && maxAttempts > 1 {
+		maxAttempts = 1
+	}
+
 	var lastErr error
-	for attempt := 0; attempt < totalAccounts; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		candidate, err := pool.GetNextCandidate()
 		if err != nil {
 			return "", err // all accounts in cooldown or empty
