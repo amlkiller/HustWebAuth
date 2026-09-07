@@ -95,48 +95,48 @@ var rootCmd = &cobra.Command{
 	Use:   filenameWithSuffix,
 	Short: "A program used to implement Ruijie web authentication",
 	Long:  `HustWebAuth is a program used to implement Ruijie web authentication.`,
-	PreRunE: func(cmd *cobra.Command, args []string) error {
-		// Validate that at least one account or interface is configured
-		accounts := getEffectiveAccounts()
-		if len(accounts) == 0 && len(configuredInterfaces) == 0 {
-			return fmt.Errorf("no authentication account configured; specify via -a/--account or config file")
+}
+
+func parseAccountList(accStr, pwdStr, svcType string, isEncrypt bool) []Account {
+	accList := strings.Split(accStr, ",")
+	pwdList := strings.Split(pwdStr, ",")
+	var list []Account
+	for i, a := range accList {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
 		}
-		return nil
-	},
-	Run: func(cmd *cobra.Command, args []string) {
-		runDaemon()
-	},
+		p := ""
+		if i < len(pwdList) {
+			p = strings.TrimSpace(pwdList[i])
+		} else if len(pwdList) > 0 {
+			p = strings.TrimSpace(pwdList[len(pwdList)-1])
+		}
+		enc := isEncrypt
+		list = append(list, Account{
+			Account:     a,
+			Password:    p,
+			ServiceType: svcType,
+			Encrypt:     &enc,
+		})
+	}
+	return list
 }
 
 func getEffectiveAccounts() []Account {
-	if account != "" {
-		accList := strings.Split(account, ",")
-		pwdList := strings.Split(password, ",")
-		var list []Account
-		for i, a := range accList {
-			a = strings.TrimSpace(a)
-			if a == "" {
-				continue
-			}
-			p := ""
-			if i < len(pwdList) {
-				p = strings.TrimSpace(pwdList[i])
-			} else if len(pwdList) > 0 {
-				p = strings.TrimSpace(pwdList[len(pwdList)-1])
-			}
-			enc := encrypt
-			list = append(list, Account{
-				Account:     a,
-				Password:    p,
-				ServiceType: serviceType,
-				Encrypt:     &enc,
-			})
-		}
-		return list
+	// 1. If CLI flag -a / --account was explicitly provided, it takes highest precedence
+	if rootCmd.PersistentFlags().Lookup("account").Changed && account != "" {
+		return parseAccountList(account, password, serviceType, encrypt)
 	}
 
+	// 2. Next precedence: accounts configured in YAML (auth.accounts takes priority over auth.account)
 	if len(configuredAccounts) > 0 {
 		return configuredAccounts
+	}
+
+	// 3. Fallback: single account loaded from config or flag
+	if account != "" {
+		return parseAccountList(account, password, serviceType, encrypt)
 	}
 
 	return nil
@@ -145,6 +145,14 @@ func getEffectiveAccounts() []Account {
 func getDefaultAccountPool() *AccountPool {
 	poolOnce.Do(func() {
 		accounts := getEffectiveAccounts()
+		if len(accounts) == 0 && iface != "" {
+			for _, ifc := range configuredInterfaces {
+				if ifc.Iface == iface && len(ifc.Accounts) > 0 {
+					accounts = ifc.Accounts
+					break
+				}
+			}
+		}
 		globalAccountPool = NewAccountPool(accounts, cooldown, maxCooldown)
 	})
 	return globalAccountPool
@@ -225,6 +233,23 @@ func runCycle() {
 		Cooldown:    cooldown,
 		MaxCooldown: maxCooldown,
 	}
+	if iface != "" {
+		for _, ifc := range configuredInterfaces {
+			if ifc.Iface == iface {
+				defaultCfg.PingIP = ifc.PingIP
+				if len(ifc.Accounts) > 0 {
+					defaultCfg.Accounts = ifc.Accounts
+				}
+				if ifc.Cooldown > 0 {
+					defaultCfg.Cooldown = ifc.Cooldown
+				}
+				if ifc.MaxCooldown > 0 {
+					defaultCfg.MaxCooldown = ifc.MaxCooldown
+				}
+				break
+			}
+		}
+	}
 	runSingleWorker(defaultCfg)
 }
 
@@ -298,6 +323,18 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	cobra.OnInitialize(initLog)
 	cobra.OnFinalize(saveConfig)
+
+	rootCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		// Validate that at least one account or interface is configured
+		accounts := getEffectiveAccounts()
+		if len(accounts) == 0 && len(configuredInterfaces) == 0 {
+			return fmt.Errorf("no authentication account configured; specify via -a/--account or config file")
+		}
+		return nil
+	}
+	rootCmd.Run = func(cmd *cobra.Command, args []string) {
+		runDaemon()
+	}
 
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "f", "", "Config file (default is $HOME/HustWebAuth.yaml)")
 	rootCmd.PersistentFlags().StringVarP(&account, "account", "a", "", "Account(s) for authentication (comma-separated for multi-account)")
