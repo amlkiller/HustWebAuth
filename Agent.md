@@ -243,7 +243,7 @@
 
 - **`.github/workflows/make.yml`**：
   - 触发条件：推送以 Tag（如 `v*`）命名的 Git 标签。
-  - 流程：Checkout -> 配置 Go 1.20 -> 执行 `make -f Makefile.cross-compiles` 批量构建 -> 使用 `ncipollo/release-action` 上传 `release/*` 下的所有二进制制品。
+  - 流程：Checkout -> 配置 Go 1.26 -> 执行 `make -f Makefile.cross-compiles` 批量构建 -> 使用 `ncipollo/release-action` 上传 `release/*` 下的所有二进制制品。
   - 自动变更日志：通过 `dropseed/changerelease` 读取 `CHANGELOG.md` 生成对应的 Release Notes。
 
 ---
