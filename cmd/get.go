@@ -85,14 +85,21 @@ func GetLoginUrlWithInterface(ifaceName string) (string, string, bool, error) {
 	if err != nil {
 		return "", "", false, err
 	}
-	res := string(body)
 
-	// Safe URL extraction without crashing on missing single quotes
+	url, queryString, err := extractRedirectURL(string(body))
+	if err != nil {
+		return "", "", false, err
+	}
+	return url, queryString, false, nil
+}
+
+// extractRedirectURL extracts the redirect URL and escaped query string from the raw response body.
+func extractRedirectURL(res string) (url string, queryString string, err error) {
 	var rawURL string
-	if parts := strings.Split(res, "'"); len(parts) >= 3 {
-		rawURL = parts[1]
-	} else if partsQuote := strings.Split(res, "\""); len(partsQuote) >= 3 {
-		for _, p := range partsQuote {
+
+	// 1. Search in single quotes
+	if strings.Contains(res, "'") {
+		for _, p := range strings.Split(res, "'") {
 			if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
 				rawURL = p
 				break
@@ -100,28 +107,35 @@ func GetLoginUrlWithInterface(ifaceName string) (string, string, bool, error) {
 		}
 	}
 
-	if rawURL == "" {
-		// Fallback: check if the body directly starts with or contains http
-		if strings.Contains(res, "http://") || strings.Contains(res, "https://") {
-			for _, token := range strings.Fields(res) {
-				if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
-					rawURL = strings.Trim(token, `'"<>;`)
-					break
-				}
+	// 2. Search in double quotes
+	if rawURL == "" && strings.Contains(res, "\"") {
+		for _, p := range strings.Split(res, "\"") {
+			if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+				rawURL = p
+				break
+			}
+		}
+	}
+
+	// 3. Fallback: search in space-separated tokens
+	if rawURL == "" && (strings.Contains(res, "http://") || strings.Contains(res, "https://")) {
+		for _, token := range strings.Fields(res) {
+			cleanToken := strings.Trim(token, `'"<>;=()`)
+			if strings.HasPrefix(cleanToken, "http://") || strings.HasPrefix(cleanToken, "https://") {
+				rawURL = cleanToken
+				break
 			}
 		}
 	}
 
 	if rawURL == "" {
-		return "", "", false, fmt.Errorf("unable to extract login redirect URL from response: %s", res)
+		return "", "", fmt.Errorf("unable to extract login redirect URL from response: %s", res)
 	}
 
-	urlParts := strings.Split(rawURL, "?")
+	urlParts := strings.SplitN(rawURL, "?", 2)
 	if len(urlParts) < 2 {
-		return rawURL, "", false, nil
+		return rawURL, "", nil
 	}
 
-	url := rawURL
-	queryString := urlutil.QueryEscape(urlParts[1])
-	return url, queryString, false, nil
+	return rawURL, urlutil.QueryEscape(urlParts[1]), nil
 }
