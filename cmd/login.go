@@ -212,13 +212,11 @@ func LoginWithInterface(ifaceName string, pool *AccountPool, doRegister bool) (r
 					if userIndex, ok := resJson["userIndex"].(string); ok {
 						regRes, err := RegisterMACWithClient(client, url, userIndex, cookie)
 						if err != nil {
-							register = false
 							return "", err
 						}
 						return regRes, nil
 					}
 				}
-				register = false
 				return "Unsupport register service. ", nil
 			}
 			return res, nil

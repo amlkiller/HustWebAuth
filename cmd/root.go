@@ -272,10 +272,19 @@ func runSingleWorker(cfg InterfaceConfig) {
 				log.Printf("[%s] Login failed, Err: %v\n", tag, err)
 				log.Printf("[%s] Login retry %d times after %s\n", tag, retryCount, cycleDuration)
 			} else {
-				log.Fatalf("[%s] Login failed, Err: %v\n", tag, err)
+				log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+				log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
+				if len(configuredInterfaces) == 0 {
+					os.Exit(1)
+				}
+				return
 			}
 		} else {
-			log.Fatalf("[%s] Login failed, Err: %v\n", tag, err)
+			log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+			if len(configuredInterfaces) == 0 {
+				os.Exit(1)
+			}
+			return
 		}
 	}
 	if res != "" {
