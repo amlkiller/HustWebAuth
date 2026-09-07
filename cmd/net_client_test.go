@@ -20,6 +20,7 @@ func TestResolveInterface(t *testing.T) {
 	name, ip, err = ResolveInterface("127.0.0.1")
 	require.NoError(t, err)
 	assert.Equal(t, net.ParseIP("127.0.0.1").To4(), ip.To4())
+	_ = name
 
 	// Non-existent interface name should return error
 	_, _, err = ResolveInterface("non_existent_iface_999")

@@ -70,7 +70,9 @@ func (p *AccountPool) CalculateCooldown(consecutiveFails int) time.Duration {
 		return 0
 	}
 	shift := consecutiveFails
-	if shift > 10 {
+	if shift < 0 {
+		shift = 0
+	} else if shift > 10 {
 		shift = 10 // avoid integer overflow
 	}
 	multiplier := time.Duration(1 << shift)

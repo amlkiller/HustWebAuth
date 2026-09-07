@@ -28,6 +28,8 @@ func TestAccountPool_CalculateCooldown(t *testing.T) {
 	assert.Equal(t, 2*time.Hour, pool.CalculateCooldown(4))
 	// n=10: capped at 2h
 	assert.Equal(t, 2*time.Hour, pool.CalculateCooldown(10))
+	// n=-1: negative shift defense, should treat as 0
+	assert.Equal(t, 10*time.Minute, pool.CalculateCooldown(-1))
 	// n=50: overflow protection, capped at 2h
 	assert.Equal(t, 2*time.Hour, pool.CalculateCooldown(50))
 }
