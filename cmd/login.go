@@ -184,6 +184,8 @@ func LoginWithInterface(ifaceName string, pool *AccountPool, doRegister bool, ta
 		return "", errors.New("no accounts available for authentication")
 	}
 
+	pool.SetRotation(rotationEnable)
+
 	maxAttempts := totalAccounts
 	if !rotationEnable && maxAttempts > 1 {
 		maxAttempts = 1

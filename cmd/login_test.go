@@ -149,12 +149,36 @@ func TestRotationDisabled(t *testing.T) {
 		{Account: "u1", Password: "p1"},
 		{Account: "u2", Password: "p2"},
 	}, 10*time.Minute, 2*time.Hour)
+	pool.SetRotation(false)
 
 	maxAttempts := pool.AccountsCount()
 	if !rotationEnable && maxAttempts > 1 {
 		maxAttempts = 1
 	}
 	assert.Equal(t, 1, maxAttempts)
+
+	// When rotation is disabled, multiple candidate requests must ALWAYS return the first account
+	cand1, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "u1", cand1.Account.Account)
+
+	cand2, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "u1", cand2.Account.Account)
+
+	// Disconnection when rotation is disabled must not switch to u2
+	pool.MarkActive(cand1)
+	pool.MarkKicked()
+	candAfterKick, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "u1", candAfterKick.Account.Account)
+
+	// When rotation is re-enabled, it rotates to u2
+	pool.SetRotation(true)
+	pool.MarkFailed(candAfterKick, "failed")
+	candRotated, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "u2", candRotated.Account.Account)
 
 	rotationEnable = true
 	maxAttemptsEnabled := pool.AccountsCount()

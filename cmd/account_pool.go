@@ -33,6 +33,7 @@ type AccountPool struct {
 	maxCooldown   time.Duration
 	activeAccount *ManagedAccount
 	wasConnected  bool
+	rotation      bool
 }
 
 // NewAccountPool creates an AccountPool.
@@ -61,7 +62,22 @@ func NewAccountPool(accounts []Account, baseCooldown, maxCooldown time.Duration)
 		accounts:     managed,
 		baseCooldown: baseCooldown,
 		maxCooldown:  maxCooldown,
+		rotation:     true,
 	}
+}
+
+// SetRotation sets whether account rotation is enabled.
+func (p *AccountPool) SetRotation(enable bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rotation = enable
+}
+
+// Rotation returns whether account rotation is enabled.
+func (p *AccountPool) Rotation() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.rotation
 }
 
 // CalculateCooldown computes the exponential backoff cooldown duration for a given fail count.
@@ -93,12 +109,12 @@ func (p *AccountPool) GetNextCandidate() (*ManagedAccount, error) {
 		return nil, fmt.Errorf("no accounts configured in pool")
 	}
 
-	if n == 1 {
+	if !p.rotation || n == 1 {
 		acc := p.accounts[0]
 		now := time.Now()
 		if now.Before(acc.CooldownUntil) {
 			remaining := acc.CooldownUntil.Sub(now).Round(time.Second)
-			return nil, fmt.Errorf("account %q is in cooldown, earliest available in %s (until %s)",
+			return nil, fmt.Errorf("primary account %q is in cooldown, earliest available in %s (until %s)",
 				acc.Account.Account, remaining, acc.CooldownUntil.Format("15:04:05"))
 		}
 		return acc, nil
@@ -151,7 +167,7 @@ func (p *AccountPool) MarkKicked() {
 
 	if p.wasConnected && p.activeAccount != nil {
 		acc := p.activeAccount
-		if len(p.accounts) > 1 {
+		if len(p.accounts) > 1 && p.rotation {
 			cd := p.CalculateCooldown(acc.ConsecutiveFails)
 			acc.CooldownUntil = time.Now().Add(cd)
 			acc.ConsecutiveFails++
@@ -159,7 +175,7 @@ func (p *AccountPool) MarkKicked() {
 				acc.Account.Account, cd, acc.ConsecutiveFails, acc.CooldownUntil.Format("15:04:05"))
 		} else {
 			acc.ConsecutiveFails++
-			log.Printf("[AccountPool] Account %q was kicked offline / disconnected. Immediate reconnection will be attempted (single account)\n",
+			log.Printf("[AccountPool] Account %q was kicked offline / disconnected. Immediate reconnection will be attempted (single account or rotation disabled)\n",
 				acc.Account.Account)
 		}
 		acc.LastFailReason = "kicked offline / disconnected"
@@ -173,7 +189,7 @@ func (p *AccountPool) MarkFailed(acc *ManagedAccount, reason string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.accounts) > 1 {
+	if len(p.accounts) > 1 && p.rotation {
 		cd := p.CalculateCooldown(acc.ConsecutiveFails)
 		acc.CooldownUntil = time.Now().Add(cd)
 		acc.ConsecutiveFails++
