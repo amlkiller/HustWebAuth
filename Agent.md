@@ -19,7 +19,7 @@
 | :--- | :--- | :--- |
 | `github.com/spf13/cobra` | `v1.6.1` | CLI 命令行脚手架、子命令树管理与参数解析 |
 | `github.com/spf13/viper` | `v1.15.0` | 配置文件读写（YAML）、环境变量绑定与配置合并 |
-| `github.com/prometheus-community/pro-bing` | `v0.1.0` | 网络连通性 ICMP/UDP Ping 探测 |
+| `golang.org/x/sys` | `v0.5.0` | Linux 底层 Socket 控制（`SO_BINDTODEVICE` 强网口绑定） |
 | `github.com/kardianos/service` | `v1.2.2` | 跨平台系统服务注册、启停、自启管理 |
 | `github.com/sevlyar/go-daemon` | `v0.1.6` | Unix 环境下的进程 Fork 与 Daemon 守护化 |
 | `github.com/AdguardTeam/golibs` | `v0.11.4` | 文件树遍历、字符串/数学工具库（源自 AdGuardHome） |
@@ -78,12 +78,12 @@
 [启动 (CLI/Daemon/Service)]
             │
             ▼
-[Ping 探测目标 IP (默认: 202.114.0.131)]
-      │                     │
-(成功: PacketLoss < 100%)    (失败: 丢包 100%)
-      │                     │
-      ▼                     ▼
-[网络已畅通]        [HTTP GET 重定向地址 (123.123.123.123)]
+[强网口绑定 HTTP 204 探测 (默认: connect.rom.miui.com/generate_204)]
+      │                                       │
+(成功: 返回 HTTP 204)                  (失败/未通/劫持)
+      │                                       │
+      ▼                                       ▼
+[网络已畅通]               [从劫持响应或 fallback 重定向地址提取 Login URL]
       │                     │
       │                     ▼
       │             [解析获取 Login URL 与 QueryString]
@@ -152,15 +152,17 @@
 
 ### 3.3 网络探测与重定向解析 (`cmd/get.go`)
 
-- **`GetLoginUrl() (url string, queryString string, connected bool, err error)`**：
-  1. **连通性探测**：
-     - 使用 `pro-bing` 向指定 IP（默认 `202.114.0.131`，华科校园网 DNS）发送 ICMP/UDP Ping 包。
-     - 支持参数：`pingCount`（次数，默认 3 次）、`pingTimeout`（超时，默认 3s）、`pingPrivilege`（是否使用特权原始 ICMP 套接字）。
-     - 若 `PacketLoss < 100.0`，判定网络在线，直接返回 `connected = true`。
-  2. **捕获 Portal 重定向**：
-     - 若网络未连通，通过带有 5 秒超时的 HTTP Client 请求 `redirectURL`（默认 `http://123.123.123.123`）。
-     - 在锐捷校园网劫持环境下，网关会返回一段包含跳转 URL 的 HTML（例如包含脚本跳转或 meta 跳转，且 URL 被单引号包裹）。
-     - 代码利用 `strings.Split(res, "'")[1]` 截取出目标 URL，并通过 `strings.Split(url, "?")[1]` 取得查询参数，使用 `urlutil.QueryEscape` 编码成 `queryString` 返回。
+- **`GetLoginUrl() (url string, queryString string, connected bool, err error)`** 及 **`GetLoginUrlWithInterface(ifaceName, targetCheckURL...)`**：
+  1. **强网口绑定 HTTP 204 连通性探测**：
+     - 使用 `NewHTTPClient(ifaceName, timeout)` 创建强绑定客户端，在 Linux 下利用底层 `SO_BINDTODEVICE` 与源 IP 强绑定到对应网卡设备，避免单线多拨/多 WAN 环境下连通性检测流量走默认网关导致假在线的问题。
+     - 向连通性检测端点（默认 `http://connect.rom.miui.com/generate_204`）发送 HTTP GET 请求。
+     - 若返回 HTTP 状态码 `204 No Content`，判定网络完全在线，返回 `connected = true`。
+     - 若返回 301/302 重定向（Portal 劫持），直接从 `Location` 响应头解析登录 URL。
+     - 若返回 200 且响应 Body 中包含重定向脚本，直接从 Body 提取登录 URL。
+  2. **Portal 劫持降级回退机制**：
+     - 若 204 探测失败（如未认证时 DNS 无法解析域名）且未提取到登录 URL，自动回退请求 `redirectURL`（默认 `http://123.123.123.123`，纯 IP 绕过 DNS 解析）。
+     - 从网关劫持返回的响应（`Location` 响应头或 HTML 脚本）中提取目标登录 URL。
+     - 通过 `parseRedirectURL` 提取查询参数，并使用 `urlutil.QueryEscape` 编码为 `queryString` 返回。
 
 ### 3.4 系统服务集成 (`cmd/service.go`, `cmd/service_program.go`)
 
@@ -207,10 +209,15 @@
 | `-p, --password` | `auth.password` | 无 (必填) | 校园网认证密码 |
 | `-s, --serviceType` | `auth.serviceType` | `"internet"` | 锐捷服务类型（可选: internet, local 等） |
 | `-e, --encrypt` | `auth.encrypt` | `false` | 密码是否加密传输标志 |
-| `--pingIP` | `ping.ip` | `"202.114.0.131"` | 连通性测试 IP（默认 HUST DNS） |
-| `--pingCount` | `ping.count` | `3` | 每次 Ping 发包数 |
-| `--pingTimeout` | `ping.timeout` | `3s` | Ping 超时时长 |
-| `--pingPrivilege` | `ping.privilege` | `true` | 是否使用 Raw ICMP 套接字（需 root/管理员权限） |
+| `--cooldown` | `auth.cooldown` | `4m59s` | 掉线/认证失败基准退避冷却时长 |
+| `--maxCooldown` | `auth.maxCooldown` | `2h0m0s` | 最大指数退避冷却时长上限 |
+| `--rotation` | `auth.rotation` | `true` | 是否启用多账号轮转 |
+| `--checkURL` | `check.url` | `"http://connect.rom.miui.com/generate_204"` | HTTP 204 网络连通性探测端点 |
+| `--checkTimeout` | `check.timeout` | `5s` | 连通性探测超时时长 |
+| `--pingIP` | `ping.ip` | `"202.114.0.131"` | 连通性测试 IP（旧版兼容，推荐使用 `--checkURL`） |
+| `--pingCount` | `ping.count` | `3` | 每次 Ping 发包数（旧版兼容） |
+| `--pingTimeout` | `ping.timeout` | `3s` | Ping 超时时长（旧版兼容） |
+| `--pingPrivilege` | `ping.privilege` | `true` | 是否使用 Raw ICMP 套接字（旧版兼容） |
 | `--redirectURL` | `redirect.url` | `"http://123.123.123.123"` | 触发 Portal 劫持的重定向测试地址 |
 | `-l, --logFile` | `log.file` | `""` (输出至终端) | 日志文件名称 |
 | `--logDir` | `log.dir` | `Temp/HustWebAuth` | 日志存放目录 |

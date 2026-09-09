@@ -95,12 +95,17 @@ Web认证
     #       - account: "user2"
     #         password: "pass2"
 
-    # 网络连通性探测
-    ping:
-      ip: "202.114.0.131"            # 连通性测试 IP (默认 HUST DNS)
-      count: 3                       # 每次探测 ping 包数量
-      timeout: 3s                    # 单次探测超时
-      privilege: true                # 是否使用原始 ICMP 套接字 (需 root 权限)
+    # 网络连通性探测 (基于原生 SO_BINDTODEVICE 强设备绑定的 HTTP 204 检测)
+    check:
+      url: "http://connect.rom.miui.com/generate_204"  # 连通性探测端点 (HTTP 204)
+      timeout: 5s                                      # 探测超时时长
+
+    # 旧版 ICMP Ping 兼容配置 (可选)
+    # ping:
+    #   ip: "202.114.0.131"
+    #   count: 3
+    #   timeout: 3s
+    #   privilege: true
 
     # 循环探测保活
     cycle:
@@ -152,6 +157,8 @@ Available Commands:
 
 Flags:
   -a, --account string           Account(s) for authentication (comma-separated for multi-account)
+      --checkTimeout duration    Timeout for connectivity check (default 5s)
+      --checkURL string          URL endpoint for HTTP 204 connectivity check (default "http://connect.rom.miui.com/generate_204")
   -f, --config string            Config file (default is $HOME/HustWebAuth.yaml)
       --cooldown duration        Base cooldown duration for exponential backoff (default 4m59s)
   -c, --cycle                    Enable cycle mode
@@ -172,14 +179,10 @@ Flags:
                                   (default true)
       --maxCooldown duration     Max cooldown duration for exponential backoff (default 2h0m0s)
   -p, --password string          Password(s) for authentication (comma-separated)
-      --pingCount int            ping count (default 3)
-      --pingIP string            IP address to ping (default "202.114.0.131")
-      --pingPrivilege            Sets the type of ping pinger will send.
-                                 false means pinger will send an "unprivileged" UDP ping.
-                                 true means pinger will send a "privileged" raw ICMP ping.
-                                 NOTE: setting to true requires that it be run with super-user privileges.
-                                  (default true)
-      --pingTimeout duration     Ping timeout (default 3s)
+      --pingCount int            ping count (deprecated) (default 3)
+      --pingIP string            IP address to ping (deprecated, please use --checkURL) (default "202.114.0.131")
+      --pingPrivilege            Sets the type of ping pinger will send (deprecated). (default true)
+      --pingTimeout duration     Ping timeout (deprecated) (default 3s)
       --redirectURL string       Redirect URL (default "http://123.123.123.123")
       --rotation                 Enable multi-account rotation (default true)
   -o, --save                     Save config file

@@ -49,6 +49,8 @@ var (
 	cooldown       time.Duration
 	maxCooldown    time.Duration
 	rotationEnable bool
+	checkURL       string
+	checkTimeout   time.Duration
 	pingIP         string
 	pingCount      int
 	pingTimeout    time.Duration
@@ -72,9 +74,21 @@ var (
 type InterfaceConfig struct {
 	Iface       string        `json:"iface" yaml:"iface" mapstructure:"iface"`
 	PingIP      string        `json:"pingIP,omitempty" yaml:"pingIP,omitempty" mapstructure:"pingIP"`
+	CheckURL    string        `json:"checkURL,omitempty" yaml:"checkURL,omitempty" mapstructure:"checkURL"`
 	Accounts    []Account     `json:"accounts,omitempty" yaml:"accounts,omitempty" mapstructure:"accounts"`
 	Cooldown    time.Duration `json:"cooldown,omitempty" yaml:"cooldown,omitempty" mapstructure:"cooldown"`
 	MaxCooldown time.Duration `json:"maxCooldown,omitempty" yaml:"maxCooldown,omitempty" mapstructure:"maxCooldown"`
+}
+
+// GetCheckURL returns the connectivity check endpoint for this interface.
+func (c InterfaceConfig) GetCheckURL() string {
+	if c.CheckURL != "" {
+		return c.CheckURL
+	}
+	if c.PingIP != "" && (strings.HasPrefix(c.PingIP, "http://") || strings.HasPrefix(c.PingIP, "https://")) {
+		return c.PingIP
+	}
+	return checkURL
 }
 
 var (
@@ -243,11 +257,13 @@ func runCycle() {
 		Accounts:    getEffectiveAccounts(),
 		Cooldown:    cooldown,
 		MaxCooldown: maxCooldown,
+		CheckURL:    checkURL,
 	}
 	if iface != "" {
 		for _, ifc := range configuredInterfaces {
 			if ifc.Iface == iface {
 				defaultCfg.PingIP = ifc.PingIP
+				defaultCfg.CheckURL = ifc.CheckURL
 				if len(ifc.Accounts) > 0 {
 					defaultCfg.Accounts = ifc.Accounts
 				}
@@ -273,7 +289,7 @@ func runSingleWorker(cfg InterfaceConfig, isMultiWorker bool) {
 		tag, pool.AccountsCount(), cfg.Cooldown, cfg.MaxCooldown)
 
 	retryCount := 0
-	res, err := LoginWithInterface(cfg.Iface, pool, register, cfg.PingIP)
+	res, err := LoginWithInterface(cfg.Iface, pool, register, cfg.GetCheckURL())
 	if err != nil {
 		if cycleEnable {
 			if strings.Contains(err.Error(), "in cooldown") {
@@ -309,7 +325,7 @@ func runSingleWorker(cfg InterfaceConfig, isMultiWorker bool) {
 		eventsTick := time.NewTicker(cycleDuration)
 		defer eventsTick.Stop()
 		for range eventsTick.C {
-			res, err := LoginWithInterface(cfg.Iface, pool, false, cfg.PingIP)
+			res, err := LoginWithInterface(cfg.Iface, pool, false, cfg.GetCheckURL())
 			if err != nil {
 				if strings.Contains(err.Error(), "in cooldown") {
 					log.Printf("[%s] %v, waiting for cooldown to expire...\n", tag, err)
@@ -374,10 +390,12 @@ func init() {
 	rootCmd.PersistentFlags().DurationVar(&maxCooldown, "maxCooldown", 2*time.Hour, "Max cooldown duration for exponential backoff")
 	rootCmd.PersistentFlags().BoolVar(&rotationEnable, "rotation", true, "Enable multi-account rotation")
 
-	rootCmd.PersistentFlags().StringVar(&pingIP, "pingIP", "202.114.0.131", "IP address to ping")
-	rootCmd.PersistentFlags().IntVar(&pingCount, "pingCount", 3, "ping count")
-	rootCmd.PersistentFlags().DurationVar(&pingTimeout, "pingTimeout", 3*time.Second, "Ping timeout")
-	rootCmd.PersistentFlags().BoolVar(&pingPrivilege, "pingPrivilege", true, `Sets the type of ping pinger will send.
+	rootCmd.PersistentFlags().StringVar(&checkURL, "checkURL", "http://connect.rom.miui.com/generate_204", "URL endpoint for HTTP 204 connectivity check")
+	rootCmd.PersistentFlags().DurationVar(&checkTimeout, "checkTimeout", 5*time.Second, "Timeout for connectivity check")
+	rootCmd.PersistentFlags().StringVar(&pingIP, "pingIP", "202.114.0.131", "IP address to ping (deprecated, please use --checkURL)")
+	rootCmd.PersistentFlags().IntVar(&pingCount, "pingCount", 3, "ping count (deprecated)")
+	rootCmd.PersistentFlags().DurationVar(&pingTimeout, "pingTimeout", 3*time.Second, "Ping timeout (deprecated)")
+	rootCmd.PersistentFlags().BoolVar(&pingPrivilege, "pingPrivilege", true, `Sets the type of ping pinger will send (deprecated).
 false means pinger will send an "unprivileged" UDP ping.
 true means pinger will send a "privileged" raw ICMP ping.
 NOTE: setting to true requires that it be run with super-user privileges.
@@ -405,6 +423,8 @@ NOTE: setting to true requires that it be run with super-user privileges.
 	viper.BindPFlag("auth.maxCooldown", rootCmd.PersistentFlags().Lookup("maxCooldown"))
 	viper.BindPFlag("auth.rotation", rootCmd.PersistentFlags().Lookup("rotation"))
 
+	viper.BindPFlag("check.url", rootCmd.PersistentFlags().Lookup("checkURL"))
+	viper.BindPFlag("check.timeout", rootCmd.PersistentFlags().Lookup("checkTimeout"))
 	viper.BindPFlag("ping.ip", rootCmd.PersistentFlags().Lookup("pingIP"))
 	viper.BindPFlag("ping.count", rootCmd.PersistentFlags().Lookup("pingCount"))
 	viper.BindPFlag("ping.timeout", rootCmd.PersistentFlags().Lookup("pingTimeout"))
@@ -511,15 +531,31 @@ func initConfig() {
 					if len(ifcs[i].Accounts) == 0 {
 						ifcs[i].Accounts = configuredAccounts
 					}
+					if ifcs[i].CheckURL == "" {
+						if ifcs[i].PingIP != "" && (strings.HasPrefix(ifcs[i].PingIP, "http://") || strings.HasPrefix(ifcs[i].PingIP, "https://")) {
+							ifcs[i].CheckURL = ifcs[i].PingIP
+						} else {
+							ifcs[i].CheckURL = checkURL
+						}
+					}
 				}
 				configuredInterfaces = ifcs
 			}
 		}
 
+		if viper.IsSet("check.url") {
+			checkURL = viper.GetString("check.url")
+		}
+		if viper.IsSet("check.timeout") {
+			checkTimeout = viper.GetDuration("check.timeout")
+		}
 		pingIP = viper.GetString("ping.ip")
 		pingCount = viper.GetInt("ping.count")
 		pingTimeout = viper.GetDuration("ping.timeout")
 		pingPrivilege = viper.GetBool("ping.privilege")
+		if checkTimeout == 5*time.Second && pingTimeout != 3*time.Second && !viper.IsSet("check.timeout") {
+			checkTimeout = pingTimeout
+		}
 		redirectURL = viper.GetString("redirect.url")
 		logDir = viper.GetString("log.dir")
 		logFile = viper.GetString("log.file")

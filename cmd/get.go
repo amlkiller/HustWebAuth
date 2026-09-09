@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	urlutil "net/url"
 	"strings"
 	"time"
 
-	ping "github.com/prometheus-community/pro-bing"
 	"github.com/spf13/cobra"
 )
 
@@ -21,18 +21,18 @@ import (
 var getCmd = &cobra.Command{
 	Use:   "get",
 	Short: "Get the login url from the redirect url",
-	Long:  `If the specified IP fails to be pinged for more than the specified counts, get the login_url from the redirect_url`,
+	Long:  `Check connectivity via HTTP 204 endpoint and get the login_url from the redirect_url if unauthenticated`,
 	Run: func(cmd *cobra.Command, args []string) {
-		targetPingIP := ""
+		targetCheckURL := ""
 		if iface != "" {
 			for _, ifc := range configuredInterfaces {
-				if ifc.Iface == iface && ifc.PingIP != "" {
-					targetPingIP = ifc.PingIP
+				if ifc.Iface == iface {
+					targetCheckURL = ifc.GetCheckURL()
 					break
 				}
 			}
 		}
-		url, queryString, connected, err := GetLoginUrlWithInterface(iface, targetPingIP)
+		url, queryString, connected, err := GetLoginUrlWithInterface(iface, targetCheckURL)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
@@ -54,57 +54,104 @@ func GetLoginUrl() (string, string, bool, error) {
 	return GetLoginUrlWithInterface(iface)
 }
 
-// GetLoginUrlWithInterface gets the login url from the redirect url, bound to the given interface.
-func GetLoginUrlWithInterface(ifaceName string, targetPingIP ...string) (string, string, bool, error) {
-	targetIP := pingIP
-	if len(targetPingIP) > 0 && targetPingIP[0] != "" {
-		targetIP = targetPingIP[0]
+// parseRedirectURL extracts the base URL and query-escaped params from a full URL string.
+func parseRedirectURL(rawURL string) (string, string) {
+	urlParts := strings.SplitN(rawURL, "?", 2)
+	if len(urlParts) < 2 {
+		return rawURL, ""
+	}
+	return rawURL, urlutil.QueryEscape(urlParts[1])
+}
+
+// GetLoginUrlWithInterface checks network connectivity and extracts the login url bound to the specified interface.
+func GetLoginUrlWithInterface(ifaceName string, targetCheckURL ...string) (string, string, bool, error) {
+	endpoint := checkURL
+	if len(targetCheckURL) > 0 && targetCheckURL[0] != "" {
+		endpoint = targetCheckURL[0]
+	}
+	if endpoint == "" {
+		endpoint = "http://connect.rom.miui.com/generate_204"
+	}
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		endpoint = "http://" + endpoint
 	}
 
-	_, ip, err := ResolveInterface(ifaceName)
-	if err != nil && ifaceName != "" {
-		return "", "", false, fmt.Errorf("resolve interface %q failed: %w", ifaceName, err)
+	timeout := checkTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
 	}
 
-	pinger, err := ping.NewPinger(targetIP)
+	client, err := NewHTTPClient(ifaceName, timeout)
 	if err != nil {
 		return "", "", false, err
 	}
-	pinger.Count = pingCount
-	pinger.Timeout = pingTimeout
-	pinger.SetPrivileged(pingPrivilege)
-	if ip != nil {
-		pinger.Source = ip.String()
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 
-	if err = pinger.Run(); err != nil { // Blocks until finished.
-		return "", "", false, err
+	// 1. Probe connectivity using HTTP 204 endpoint bound to the interface
+	resp, probeErr := client.Get(endpoint)
+	if probeErr == nil {
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNoContent {
+			return "", "", true, nil
+		}
+
+		// If redirected or hijacked by captive portal, attempt to extract login URL
+		if loc := resp.Header.Get("Location"); loc != "" {
+			if parsedLoc, parseErr := urlutil.Parse(loc); parseErr == nil {
+				if !parsedLoc.IsAbs() && resp.Request != nil && resp.Request.URL != nil {
+					parsedLoc = resp.Request.URL.ResolveReference(parsedLoc)
+				}
+				u, qs := parseRedirectURL(parsedLoc.String())
+				return u, qs, false, nil
+			}
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr == nil && len(body) > 0 {
+			if u, qs, extractErr := extractRedirectURL(string(body)); extractErr == nil && u != "" {
+				return u, qs, false, nil
+			}
+		}
 	}
-	if stats := pinger.Statistics(); stats.PacketLoss < 100.0 { // get send/receive/duplicate/rtt stats
+
+	// 2. Fallback: if probe failed (e.g. DNS resolution failure before login) or didn't provide login URL,
+	// query redirectURL (http://123.123.123.123) which bypasses DNS
+	respFallback, errFallback := client.Get(redirectURL)
+	if errFallback != nil {
+		if probeErr != nil {
+			return "", "", false, fmt.Errorf("connectivity check (%s) failed: %v; fallback to redirectURL (%s) failed: %w", endpoint, probeErr, redirectURL, errFallback)
+		}
+		return "", "", false, fmt.Errorf("probe did not return 204 and fallback to redirectURL (%s) failed: %w", redirectURL, errFallback)
+	}
+	defer respFallback.Body.Close()
+
+	if respFallback.StatusCode == http.StatusNoContent {
 		return "", "", true, nil
 	}
 
-	client, err := NewHTTPClient(ifaceName, 5*time.Second)
-	if err != nil {
-		return "", "", false, err
+	if loc := respFallback.Header.Get("Location"); loc != "" {
+		if parsedLoc, parseErr := urlutil.Parse(loc); parseErr == nil {
+			if !parsedLoc.IsAbs() && respFallback.Request != nil && respFallback.Request.URL != nil {
+				parsedLoc = respFallback.Request.URL.ResolveReference(parsedLoc)
+			}
+			u, qs := parseRedirectURL(parsedLoc.String())
+			return u, qs, false, nil
+		}
 	}
 
-	resp, err := client.Get(redirectURL)
-	if err != nil {
-		return "", "", false, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", false, err
+	bodyFallback, errFallback := io.ReadAll(respFallback.Body)
+	if errFallback != nil {
+		return "", "", false, errFallback
 	}
 
-	url, queryString, err := extractRedirectURL(string(body))
-	if err != nil {
-		return "", "", false, err
+	u, qs, errExtract := extractRedirectURL(string(bodyFallback))
+	if errExtract != nil {
+		return "", "", false, errExtract
 	}
-	return url, queryString, false, nil
+	return u, qs, false, nil
 }
 
 // extractRedirectURL extracts the redirect URL and escaped query string from the raw response body.
@@ -146,10 +193,6 @@ func extractRedirectURL(res string) (url string, queryString string, err error) 
 		return "", "", fmt.Errorf("unable to extract login redirect URL from response: %s", res)
 	}
 
-	urlParts := strings.SplitN(rawURL, "?", 2)
-	if len(urlParts) < 2 {
-		return rawURL, "", nil
-	}
-
-	return rawURL, urlutil.QueryEscape(urlParts[1]), nil
+	u, qs := parseRedirectURL(rawURL)
+	return u, qs, nil
 }
