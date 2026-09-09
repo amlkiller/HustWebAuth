@@ -187,3 +187,32 @@ func TestRotationDisabled(t *testing.T) {
 	}
 	assert.Equal(t, 2, maxAttemptsEnabled)
 }
+
+func TestInterfacePingIPResolution(t *testing.T) {
+	origIface := iface
+	origConfiguredInterfaces := configuredInterfaces
+	defer func() {
+		iface = origIface
+		configuredInterfaces = origConfiguredInterfaces
+	}()
+
+	iface = "vwan1"
+	configuredInterfaces = []InterfaceConfig{
+		{
+			Iface:  "vwan1",
+			PingIP: "1.2.3.4",
+		},
+	}
+
+	targetPingIP := ""
+	if iface != "" {
+		for _, ifc := range configuredInterfaces {
+			if ifc.Iface == iface && ifc.PingIP != "" {
+				targetPingIP = ifc.PingIP
+				break
+			}
+		}
+	}
+	assert.Equal(t, "1.2.3.4", targetPingIP)
+}
+

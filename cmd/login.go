@@ -145,8 +145,17 @@ func RegisterMACWithClient(client *http.Client, url string, userIndex string, co
 
 // Login performs Ruijie web auth once using default pool and interface.
 func Login() (res string, err error) {
+	targetPingIP := ""
+	if iface != "" {
+		for _, ifc := range configuredInterfaces {
+			if ifc.Iface == iface && ifc.PingIP != "" {
+				targetPingIP = ifc.PingIP
+				break
+			}
+		}
+	}
 	pool := getDefaultAccountPool()
-	return LoginWithInterface(iface, pool, register)
+	return LoginWithInterface(iface, pool, register, targetPingIP)
 }
 
 // LoginWithInterface handles ping detection, kicked-out exponential backoff, and multi-account rotation on a specific interface.

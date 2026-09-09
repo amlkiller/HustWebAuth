@@ -71,7 +71,7 @@ Web认证
       serviceType: "internet"        # 锐捷服务类型 (internet 或 local)
       encrypt: false                 # 密码是否加密传输
       rotation: true                 # 是否启用多账号轮转
-      cooldown: 10m                  # 初始基准冷却时长
+      cooldown: 4m59s                # 初始基准冷却时长
       maxCooldown: 2h                # 最大封顶冷却时长
       accounts:                      # 多账号轮转列表 (优先于单个 account)
         - account: "user1"
@@ -153,7 +153,7 @@ Available Commands:
 Flags:
   -a, --account string           Account(s) for authentication (comma-separated for multi-account)
   -f, --config string            Config file (default is $HOME/HustWebAuth.yaml)
-      --cooldown duration        Base cooldown duration for exponential backoff (default 10m0s)
+      --cooldown duration        Base cooldown duration for exponential backoff (default 4m59s)
   -c, --cycle                    Enable cycle mode
       --cycleDuration duration   Cycle duration (default 5m0s)
       --cycleRetry int           Cycle retry times, -1 means retry forever (default 3)

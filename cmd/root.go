@@ -145,15 +145,26 @@ func getEffectiveAccounts() []Account {
 func getDefaultAccountPool() *AccountPool {
 	poolOnce.Do(func() {
 		accounts := getEffectiveAccounts()
-		if len(accounts) == 0 && iface != "" {
+		effectiveCooldown := cooldown
+		effectiveMaxCooldown := maxCooldown
+		if iface != "" {
 			for _, ifc := range configuredInterfaces {
-				if ifc.Iface == iface && len(ifc.Accounts) > 0 {
-					accounts = ifc.Accounts
+				if ifc.Iface == iface {
+					if len(accounts) == 0 && len(ifc.Accounts) > 0 {
+						accounts = ifc.Accounts
+					}
+					if ifc.Cooldown > 0 {
+						effectiveCooldown = ifc.Cooldown
+					}
+					if ifc.MaxCooldown > 0 {
+						effectiveMaxCooldown = ifc.MaxCooldown
+					}
 					break
 				}
 			}
 		}
-		globalAccountPool = NewAccountPool(accounts, cooldown, maxCooldown)
+		globalAccountPool = NewAccountPool(accounts, effectiveCooldown, effectiveMaxCooldown)
+		globalAccountPool.SetRotation(rotationEnable)
 	})
 	return globalAccountPool
 }
