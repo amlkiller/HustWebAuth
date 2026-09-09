@@ -351,7 +351,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&serviceType, "serviceType", "s", "internet", "Service type, options: [internet, local]")
 	rootCmd.PersistentFlags().BoolVarP(&encrypt, "encrypt", "e", false, "Password is encrypted or not (default false)")
 	rootCmd.PersistentFlags().StringVarP(&iface, "iface", "i", "", "Network interface or IP address to bind (e.g. eth0, vwan1, 10.0.0.2)")
-	rootCmd.PersistentFlags().DurationVar(&cooldown, "cooldown", 10*time.Minute, "Base cooldown duration for exponential backoff")
+	rootCmd.PersistentFlags().DurationVar(&cooldown, "cooldown", 4*time.Minute+59*time.Second, "Base cooldown duration for exponential backoff")
 	rootCmd.PersistentFlags().DurationVar(&maxCooldown, "maxCooldown", 2*time.Hour, "Max cooldown duration for exponential backoff")
 	rootCmd.PersistentFlags().BoolVar(&rotationEnable, "rotation", true, "Enable multi-account rotation")
 

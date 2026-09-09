@@ -124,3 +124,44 @@ func TestAccountPool_KickedOffline(t *testing.T) {
 	pool.ConfirmConnected()
 	assert.Equal(t, 0, nextCand.ConsecutiveFails)
 }
+
+func TestAccountPool_KickedOffline_SingleAccount(t *testing.T) {
+	accs := []Account{
+		{Account: "singleUser", Password: "pwd"},
+	}
+	pool := NewAccountPool(accs, 0, 0) // Uses default base cooldown (4m59s)
+
+	cand, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "singleUser", cand.Account.Account)
+
+	// Simulate successful login
+	pool.MarkActive(cand)
+	assert.True(t, pool.WasConnected())
+
+	// Simulate connection drop
+	pool.MarkKicked()
+	assert.False(t, pool.WasConnected())
+	assert.Nil(t, pool.ActiveAccount())
+	assert.Equal(t, 1, cand.ConsecutiveFails)
+
+	// Single account should NOT enter cooldown, should be immediately retrievable for reconnection
+	assert.True(t, cand.CooldownUntil.IsZero())
+	nextCand, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "singleUser", nextCand.Account.Account)
+
+	// Single account failure should also not block immediate re-candidate
+	pool.MarkFailed(nextCand, "temporary network error")
+	assert.Equal(t, 2, nextCand.ConsecutiveFails)
+	assert.True(t, nextCand.CooldownUntil.IsZero())
+
+	retryCand, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "singleUser", retryCand.Account.Account)
+}
+
+func TestAccountPool_DefaultCooldown(t *testing.T) {
+	pool := NewAccountPool([]Account{{Account: "u", Password: "p"}}, 0, 0)
+	assert.Equal(t, 4*time.Minute+59*time.Second, pool.CalculateCooldown(0))
+}

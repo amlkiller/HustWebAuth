@@ -38,7 +38,7 @@ type AccountPool struct {
 // NewAccountPool creates an AccountPool.
 func NewAccountPool(accounts []Account, baseCooldown, maxCooldown time.Duration) *AccountPool {
 	if baseCooldown <= 0 {
-		baseCooldown = 10 * time.Minute
+		baseCooldown = 4*time.Minute + 59*time.Second
 	}
 	if maxCooldown <= 0 {
 		maxCooldown = 2 * time.Hour
@@ -93,6 +93,17 @@ func (p *AccountPool) GetNextCandidate() (*ManagedAccount, error) {
 		return nil, fmt.Errorf("no accounts configured in pool")
 	}
 
+	if n == 1 {
+		acc := p.accounts[0]
+		now := time.Now()
+		if now.Before(acc.CooldownUntil) {
+			remaining := acc.CooldownUntil.Sub(now).Round(time.Second)
+			return nil, fmt.Errorf("account %q is in cooldown, earliest available in %s (until %s)",
+				acc.Account.Account, remaining, acc.CooldownUntil.Format("15:04:05"))
+		}
+		return acc, nil
+	}
+
 	now := time.Now()
 	var earliestCooldown time.Time
 	var earliestAcc *ManagedAccount
@@ -140,12 +151,18 @@ func (p *AccountPool) MarkKicked() {
 
 	if p.wasConnected && p.activeAccount != nil {
 		acc := p.activeAccount
-		cd := p.CalculateCooldown(acc.ConsecutiveFails)
-		acc.CooldownUntil = time.Now().Add(cd)
-		acc.ConsecutiveFails++
+		if len(p.accounts) > 1 {
+			cd := p.CalculateCooldown(acc.ConsecutiveFails)
+			acc.CooldownUntil = time.Now().Add(cd)
+			acc.ConsecutiveFails++
+			log.Printf("[AccountPool] Account %q was kicked offline. Entering exponential cooldown (%s, count=%d) until %s\n",
+				acc.Account.Account, cd, acc.ConsecutiveFails, acc.CooldownUntil.Format("15:04:05"))
+		} else {
+			acc.ConsecutiveFails++
+			log.Printf("[AccountPool] Account %q was kicked offline / disconnected. Immediate reconnection will be attempted (single account)\n",
+				acc.Account.Account)
+		}
 		acc.LastFailReason = "kicked offline / disconnected"
-		log.Printf("[AccountPool] Account %q was kicked offline. Entering exponential cooldown (%s, count=%d) until %s\n",
-			acc.Account.Account, cd, acc.ConsecutiveFails, acc.CooldownUntil.Format("15:04:05"))
 		p.activeAccount = nil
 	}
 	p.wasConnected = false
@@ -156,17 +173,22 @@ func (p *AccountPool) MarkFailed(acc *ManagedAccount, reason string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	cd := p.CalculateCooldown(acc.ConsecutiveFails)
-	acc.CooldownUntil = time.Now().Add(cd)
-	acc.ConsecutiveFails++
+	if len(p.accounts) > 1 {
+		cd := p.CalculateCooldown(acc.ConsecutiveFails)
+		acc.CooldownUntil = time.Now().Add(cd)
+		acc.ConsecutiveFails++
+		log.Printf("[AccountPool] Account %q failed (%s). Entering exponential cooldown (%s, count=%d) until %s\n",
+			acc.Account.Account, reason, cd, acc.ConsecutiveFails, acc.CooldownUntil.Format("15:04:05"))
+	} else {
+		acc.ConsecutiveFails++
+		log.Printf("[AccountPool] Account %q failed (%s). Fail count: %d\n",
+			acc.Account.Account, reason, acc.ConsecutiveFails)
+	}
 	acc.LastFailReason = reason
 
 	if p.activeAccount == acc {
 		p.activeAccount = nil
 	}
-
-	log.Printf("[AccountPool] Account %q failed (%s). Entering exponential cooldown (%s, count=%d) until %s\n",
-		acc.Account.Account, reason, cd, acc.ConsecutiveFails, acc.CooldownUntil.Format("15:04:05"))
 }
 
 // ConfirmConnected marks the state as connected and maintains stable online state.
