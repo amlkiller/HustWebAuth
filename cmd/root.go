@@ -265,7 +265,9 @@ func runSingleWorker(cfg InterfaceConfig, isMultiWorker bool) {
 	res, err := LoginWithInterface(cfg.Iface, pool, register, cfg.PingIP)
 	if err != nil {
 		if cycleEnable {
-			if cycleRetry < 0 {
+			if strings.Contains(err.Error(), "in cooldown") {
+				log.Printf("[%s] %v, waiting for cooldown in cycle...\n", tag, err)
+			} else if cycleRetry < 0 {
 				log.Printf("[%s] Login failed, Err: %v\n", tag, err)
 				log.Printf("[%s] Login retrying...\n", tag)
 			} else if retryCount < cycleRetry {
@@ -298,7 +300,9 @@ func runSingleWorker(cfg InterfaceConfig, isMultiWorker bool) {
 		for range eventsTick.C {
 			res, err := LoginWithInterface(cfg.Iface, pool, false, cfg.PingIP)
 			if err != nil {
-				if cycleRetry < 0 {
+				if strings.Contains(err.Error(), "in cooldown") {
+					log.Printf("[%s] %v, waiting for cooldown to expire...\n", tag, err)
+				} else if cycleRetry < 0 {
 					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
 					log.Printf("[%s] Login retrying...\n", tag)
 				} else if retryCount < cycleRetry {
