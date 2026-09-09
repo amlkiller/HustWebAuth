@@ -219,7 +219,7 @@ func runCycle() {
 			wg.Add(1)
 			go func(cfg InterfaceConfig) {
 				defer wg.Done()
-				runSingleWorker(cfg)
+				runSingleWorker(cfg, true)
 			}(ifcConfig)
 		}
 		wg.Wait()
@@ -250,12 +250,13 @@ func runCycle() {
 			}
 		}
 	}
-	runSingleWorker(defaultCfg)
+	runSingleWorker(defaultCfg, false)
 }
 
-func runSingleWorker(cfg InterfaceConfig) {
+func runSingleWorker(cfg InterfaceConfig, isMultiWorker bool) {
 	tag := ifaceTag(cfg.Iface)
 	pool := NewAccountPool(cfg.Accounts, cfg.Cooldown, cfg.MaxCooldown)
+	pool.SetRotation(rotationEnable)
 
 	log.Printf("[%s] Worker initialized with %d account(s), base cooldown: %s, max cooldown: %s\n",
 		tag, pool.AccountsCount(), cfg.Cooldown, cfg.MaxCooldown)
@@ -274,14 +275,14 @@ func runSingleWorker(cfg InterfaceConfig) {
 			} else {
 				log.Printf("[%s] Login failed, Err: %v\n", tag, err)
 				log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
-				if len(configuredInterfaces) == 0 {
+				if !isMultiWorker {
 					os.Exit(1)
 				}
 				return
 			}
 		} else {
 			log.Printf("[%s] Login failed, Err: %v\n", tag, err)
-			if len(configuredInterfaces) == 0 {
+			if !isMultiWorker {
 				os.Exit(1)
 			}
 			return
@@ -307,6 +308,9 @@ func runSingleWorker(cfg InterfaceConfig) {
 				} else {
 					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
 					log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
+					if !isMultiWorker {
+						os.Exit(1)
+					}
 					return
 				}
 			} else {
