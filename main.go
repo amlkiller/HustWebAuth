@@ -20,7 +20,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-// A program used to implement Ruijie web authentication
+//go:debug tlsrsakex=1
+//go:debug tls3des=1
+
 package main
 
 import "github.com/a76yyyy/HustWebAuth/cmd"

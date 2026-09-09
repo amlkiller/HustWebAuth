@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -9,6 +10,28 @@ import (
 	"syscall"
 	"time"
 )
+
+// allCipherSuites contains all supported cipher suites (both modern and legacy/insecure ones).
+var allCipherSuites = func() []uint16 {
+	var suites []uint16
+	for _, cs := range tls.CipherSuites() {
+		suites = append(suites, cs.ID)
+	}
+	for _, cs := range tls.InsecureCipherSuites() {
+		suites = append(suites, cs.ID)
+	}
+	return suites
+}()
+
+// GetDefaultTLSConfig returns a tls.Config with broad compatibility for legacy captive portal servers.
+func GetDefaultTLSConfig() *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: insecure,
+		MinVersion:         tls.VersionTLS10,
+		CipherSuites:       allCipherSuites,
+		Renegotiation:      tls.RenegotiateOnceAsClient,
+	}
+}
 
 // ResolveInterface resolves an interface name or IP string into an interface name and IPv4 address.
 func ResolveInterface(ifaceSpec string) (ifaceName string, ip net.IP, err error) {
@@ -127,6 +150,7 @@ func NewHTTPClient(iface string, timeout time.Duration) (*http.Client, error) {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   timeout,
 		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       GetDefaultTLSConfig(),
 	}
 
 	return &http.Client{

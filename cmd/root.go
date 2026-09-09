@@ -68,6 +68,7 @@ var (
 	cycleDuration  time.Duration
 	cycleRetry     int
 	logConnected   bool
+	insecure       bool = true
 )
 
 // InterfaceConfig holds configuration for an individual network interface worker.
@@ -407,6 +408,7 @@ NOTE: setting to true requires that it be run with super-user privileges.
 	rootCmd.PersistentFlags().BoolVar(&logAppend, "logAppend", true, "Log file append mode. \nNOTE: if logRandom is true, it will be ignored")
 	rootCmd.PersistentFlags().BoolVar(&logConnected, "logConnected", true, "Enable logging of \"The network is connected\"")
 	rootCmd.PersistentFlags().BoolVar(&sysLog, "syslog", false, "Enable syslog, not support windows")
+	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", true, "Allow insecure server connections when using SSL")
 	rootCmd.PersistentFlags().BoolVarP(&saveCfg, "save", "o", false, "Save config file")
 	rootCmd.Flags().BoolVarP(&daemonEnable, "daemon", "d", false, "Enable daemon mode, not support windows")
 	rootCmd.Flags().StringVar(&daemonPidFile, "daemonPidFile", "", "Daemon pid file")
@@ -415,6 +417,7 @@ NOTE: setting to true requires that it be run with super-user privileges.
 	rootCmd.Flags().IntVar(&cycleRetry, "cycleRetry", 3, "Cycle retry times, -1 means retry forever")
 
 	viper.BindPFlag("net.iface", rootCmd.PersistentFlags().Lookup("iface"))
+	viper.BindPFlag("net.insecure", rootCmd.PersistentFlags().Lookup("insecure"))
 	viper.BindPFlag("auth.account", rootCmd.PersistentFlags().Lookup("account"))
 	viper.BindPFlag("auth.password", rootCmd.PersistentFlags().Lookup("password"))
 	viper.BindPFlag("auth.serviceType", rootCmd.PersistentFlags().Lookup("serviceType"))
@@ -472,6 +475,9 @@ func initConfig() {
 
 		if viper.IsSet("net.iface") && iface == "" {
 			iface = viper.GetString("net.iface")
+		}
+		if !rootCmd.PersistentFlags().Lookup("insecure").Changed && viper.IsSet("net.insecure") {
+			insecure = viper.GetBool("net.insecure")
 		}
 
 		if account == "" {

@@ -49,7 +49,10 @@ func ifaceTag(ifaceName string) string {
 
 // GetCookie gets cookie of the auth page using the default client.
 func GetCookie(url string) (*http.Cookie, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client, err := NewHTTPClient(iface, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	return GetCookieWithClient(client, url)
 }
 
@@ -115,7 +118,10 @@ func loginWithClient(client *http.Client, url string, queryString string, acc Ac
 
 // RegisterMAC registers the mac address, only for the first time.
 func RegisterMAC(url string, userIndex string, cookie *http.Cookie) (string, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client, err := NewHTTPClient(iface, 5*time.Second)
+	if err != nil {
+		return "", err
+	}
 	return RegisterMACWithClient(client, url, userIndex, cookie)
 }
 
