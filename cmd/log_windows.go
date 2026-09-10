@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,8 +12,8 @@ func initLog() {
 	logWriter := os.Stderr
 	if logFile != "" {
 		var err error
-		if _, err := os.Stat(logDir); os.IsNotExist(err) {
-			os.Mkdir(logDir, fs.ModeDir)
+		if err = os.MkdirAll(logDir, 0755); err != nil {
+			log.Fatal("Create log dir failed, Err:", err)
 		}
 		if logRandom {
 			logWriter, err = os.CreateTemp(logDir, logFile)

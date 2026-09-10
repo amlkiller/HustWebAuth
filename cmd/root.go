@@ -25,7 +25,6 @@ package cmd
 
 import (
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -191,8 +190,8 @@ func runDaemon() {
 	if sysType != "windows" && daemonEnable {
 		if logFile == "" {
 			tmpDir := filepath.Join(getTmpDir(), "HustWebAuth")
-			if _, err := os.Stat(tmpDir); os.IsNotExist(err) {
-				os.Mkdir(tmpDir, fs.ModeDir)
+			if err := os.MkdirAll(tmpDir, 0755); err != nil {
+				log.Println("Create tmp dir failed:", err)
 			}
 			logSuffix := filenameWithSuffix
 			if iface != "" {
