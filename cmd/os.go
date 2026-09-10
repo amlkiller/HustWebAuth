@@ -22,7 +22,12 @@ func RunCommand(command string, arguments ...string) (code int, output []byte, e
 
 	if err != nil {
 		if eerr := new(exec.ExitError); errors.As(err, &eerr) {
-			return eerr.ExitCode(), eerr.Stderr, nil
+			outBytes := eerr.Stderr
+			if len(outBytes) == 0 {
+				outBytes = out
+			}
+			outBytes = outBytes[:mathutil.Min(len(outBytes), MaxCmdOutputSize)]
+			return eerr.ExitCode(), outBytes, nil
 		}
 
 		return 1, nil, fmt.Errorf("command %q failed: %w: %s", command, err, out)
