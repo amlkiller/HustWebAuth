@@ -185,7 +185,7 @@ func getDefaultAccountPool() *AccountPool {
 		if iface != "" {
 			for _, ifc := range configuredInterfaces {
 				if ifc.Iface == iface {
-					if len(accounts) == 0 && len(ifc.Accounts) > 0 {
+					if !rootCmd.PersistentFlags().Lookup("account").Changed && len(ifc.Accounts) > 0 {
 						accounts = ifc.Accounts
 					}
 					if ifc.Cooldown > 0 {
@@ -285,7 +285,7 @@ func runCycle() {
 			if ifc.Iface == iface {
 				defaultCfg.PingIP = ifc.PingIP
 				defaultCfg.CheckURL = ifc.CheckURL
-				if len(ifc.Accounts) > 0 {
+				if !rootCmd.PersistentFlags().Lookup("account").Changed && len(ifc.Accounts) > 0 {
 					defaultCfg.Accounts = ifc.Accounts
 				}
 				if ifc.Cooldown > 0 {

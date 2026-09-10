@@ -70,3 +70,42 @@ func TestGetEffectiveAccountsPrecedence(t *testing.T) {
 	assert.Equal(t, "multiUser2", accsMulti[1].Account)
 	assert.Equal(t, "pwd2", accsMulti[1].Password)
 }
+
+func TestInterfaceAccountsCliPrecedence(t *testing.T) {
+	origIface := iface
+	origConfiguredInterfaces := configuredInterfaces
+	origAccount := account
+	defer func() {
+		iface = origIface
+		configuredInterfaces = origConfiguredInterfaces
+		account = origAccount
+		rootCmd.PersistentFlags().Lookup("account").Changed = false
+	}()
+
+	iface = "eth0"
+	configuredInterfaces = []InterfaceConfig{
+		{
+			Iface: "eth0",
+			Accounts: []Account{
+				{Account: "yamlIfaceUser", Password: "pwd"},
+			},
+		},
+	}
+
+	// 1. When CLI flag -a was NOT changed, interface accounts should be used
+	rootCmd.PersistentFlags().Lookup("account").Changed = false
+	accs := getEffectiveAccounts()
+	if !rootCmd.PersistentFlags().Lookup("account").Changed && len(configuredInterfaces[0].Accounts) > 0 {
+		accs = configuredInterfaces[0].Accounts
+	}
+	assert.Equal(t, "yamlIfaceUser", accs[0].Account)
+
+	// 2. When CLI flag -a WAS changed, CLI accounts must take precedence
+	rootCmd.PersistentFlags().Lookup("account").Changed = true
+	account = "cliUser"
+	accs = getEffectiveAccounts()
+	if !rootCmd.PersistentFlags().Lookup("account").Changed && len(configuredInterfaces[0].Accounts) > 0 {
+		accs = configuredInterfaces[0].Accounts
+	}
+	assert.Equal(t, "cliUser", accs[0].Account)
+}
