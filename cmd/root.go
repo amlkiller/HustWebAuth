@@ -415,11 +415,11 @@ NOTE: setting to true requires that it be run with super-user privileges.
 	rootCmd.PersistentFlags().BoolVar(&sysLog, "syslog", false, "Enable syslog, not support windows")
 	rootCmd.PersistentFlags().BoolVarP(&insecure, "insecure", "k", true, "Allow insecure server connections when using SSL")
 	rootCmd.PersistentFlags().BoolVarP(&saveCfg, "save", "o", false, "Save config file")
-	rootCmd.Flags().BoolVarP(&daemonEnable, "daemon", "d", false, "Enable daemon mode, not support windows")
-	rootCmd.Flags().StringVar(&daemonPidFile, "daemonPidFile", "", "Daemon pid file")
-	rootCmd.Flags().BoolVarP(&cycleEnable, "cycle", "c", false, "Enable cycle mode")
-	rootCmd.Flags().DurationVar(&cycleDuration, "cycleDuration", 5*time.Minute, "Cycle duration")
-	rootCmd.Flags().IntVar(&cycleRetry, "cycleRetry", 3, "Cycle retry times, -1 means retry forever")
+	rootCmd.PersistentFlags().BoolVarP(&daemonEnable, "daemon", "d", false, "Enable daemon mode, not support windows")
+	rootCmd.PersistentFlags().StringVar(&daemonPidFile, "daemonPidFile", "", "Daemon pid file")
+	rootCmd.PersistentFlags().BoolVarP(&cycleEnable, "cycle", "c", false, "Enable cycle mode")
+	rootCmd.PersistentFlags().DurationVar(&cycleDuration, "cycleDuration", 5*time.Minute, "Cycle duration")
+	rootCmd.PersistentFlags().IntVar(&cycleRetry, "cycleRetry", 3, "Cycle retry times, -1 means retry forever")
 
 	viper.BindPFlag("net.iface", rootCmd.PersistentFlags().Lookup("iface"))
 	viper.BindPFlag("net.insecure", rootCmd.PersistentFlags().Lookup("insecure"))
@@ -444,11 +444,11 @@ NOTE: setting to true requires that it be run with super-user privileges.
 	viper.BindPFlag("log.append", rootCmd.PersistentFlags().Lookup("logAppend"))
 	viper.BindPFlag("log.connected", rootCmd.PersistentFlags().Lookup("logConnected"))
 	viper.BindPFlag("log.syslog", rootCmd.PersistentFlags().Lookup("syslog"))
-	viper.BindPFlag("daemon.enable", rootCmd.Flags().Lookup("daemon"))
-	viper.BindPFlag("daemon.pidFile", rootCmd.Flags().Lookup("daemonPidFile"))
-	viper.BindPFlag("cycle.enable", rootCmd.Flags().Lookup("cycle"))
-	viper.BindPFlag("cycle.duration", rootCmd.Flags().Lookup("cycleDuration"))
-	viper.BindPFlag("cycle.retry", rootCmd.Flags().Lookup("cycleRetry"))
+	viper.BindPFlag("daemon.enable", rootCmd.PersistentFlags().Lookup("daemon"))
+	viper.BindPFlag("daemon.pidFile", rootCmd.PersistentFlags().Lookup("daemonPidFile"))
+	viper.BindPFlag("cycle.enable", rootCmd.PersistentFlags().Lookup("cycle"))
+	viper.BindPFlag("cycle.duration", rootCmd.PersistentFlags().Lookup("cycleDuration"))
+	viper.BindPFlag("cycle.retry", rootCmd.PersistentFlags().Lookup("cycleRetry"))
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
 }
@@ -574,11 +574,21 @@ func initConfig() {
 		logAppend = viper.GetBool("log.append")
 		logConnected = viper.GetBool("log.connected")
 		sysLog = viper.GetBool("log.syslog")
-		daemonEnable = viper.GetBool("daemon.enable")
-		daemonPidFile = viper.GetString("daemon.pidFile")
-		cycleEnable = viper.GetBool("cycle.enable")
-		cycleDuration = viper.GetDuration("cycle.duration")
-		cycleRetry = viper.GetInt("cycle.retry")
+		if !rootCmd.PersistentFlags().Lookup("daemon").Changed && viper.IsSet("daemon.enable") {
+			daemonEnable = viper.GetBool("daemon.enable")
+		}
+		if !rootCmd.PersistentFlags().Lookup("daemonPidFile").Changed && viper.IsSet("daemon.pidFile") {
+			daemonPidFile = viper.GetString("daemon.pidFile")
+		}
+		if !rootCmd.PersistentFlags().Lookup("cycle").Changed && viper.IsSet("cycle.enable") {
+			cycleEnable = viper.GetBool("cycle.enable")
+		}
+		if !rootCmd.PersistentFlags().Lookup("cycleDuration").Changed && viper.IsSet("cycle.duration") {
+			cycleDuration = viper.GetDuration("cycle.duration")
+		}
+		if !rootCmd.PersistentFlags().Lookup("cycleRetry").Changed && viper.IsSet("cycle.retry") {
+			cycleRetry = viper.GetInt("cycle.retry")
+		}
 	}
 }
 

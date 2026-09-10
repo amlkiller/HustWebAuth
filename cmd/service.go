@@ -9,6 +9,7 @@ import (
 
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 type program struct {
@@ -42,6 +43,9 @@ func newSVCConfig() *service.Config {
 	}
 	if customServiceName != "" {
 		args = append(args, "--name", customServiceName)
+	}
+	if cycleEnable {
+		args = append(args, "-c")
 	}
 
 	c := &service.Config{
@@ -84,6 +88,9 @@ var (
 		Short: "System service related commands",
 		Long:  `Use HustWebAuth as a system service: install, start, stop, uninstall, etc.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !rootCmd.PersistentFlags().Lookup("cycle").Changed && !viper.IsSet("cycle.enable") {
+				cycleEnable = true
+			}
 			s, err := newSVC(&program{}, newSVCConfig())
 			if err != nil {
 				return err
