@@ -530,17 +530,9 @@ func initConfig() {
 			}
 		}
 
-		// If no accounts array was loaded but single account exists in YAML, create slice
+		// If no accounts array was loaded but single/comma-separated account exists in YAML, parse into slice
 		if len(configuredAccounts) == 0 && account != "" {
-			enc := encrypt
-			configuredAccounts = []Account{
-				{
-					Account:     account,
-					Password:    password,
-					ServiceType: serviceType,
-					Encrypt:     &enc,
-				},
-			}
+			configuredAccounts = parseAccountList(account, password, serviceType, encrypt)
 		}
 
 		// Load multi-interfaces list from interfaces

@@ -58,4 +58,15 @@ func TestGetEffectiveAccountsPrecedence(t *testing.T) {
 	accsSingle := getEffectiveAccounts()
 	assert.Len(t, accsSingle, 1)
 	assert.Equal(t, "singleFromYaml", accsSingle[0].Account)
+
+	// Case 3: Comma-separated accounts configured in auth.account
+	account = "multiUser1, multiUser2"
+	password = "pwd1, pwd2"
+	configuredAccounts = parseAccountList(account, password, serviceType, encrypt)
+	accsMulti := getEffectiveAccounts()
+	assert.Len(t, accsMulti, 2)
+	assert.Equal(t, "multiUser1", accsMulti[0].Account)
+	assert.Equal(t, "pwd1", accsMulti[0].Password)
+	assert.Equal(t, "multiUser2", accsMulti[1].Account)
+	assert.Equal(t, "pwd2", accsMulti[1].Password)
 }
