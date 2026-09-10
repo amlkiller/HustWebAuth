@@ -127,13 +127,17 @@ var (
 			}
 			log.Println("HustWebAuth service has been installed")
 
+			// Save configuration to disk BEFORE starting the service to avoid race conditions
+			// where the newly launched service reads an uncreated or incomplete config file.
+			saveCfg = true
+			saveConfig()
+
 			err = svcAction(s, "start")
 			if err != nil {
 				log.Fatal(err)
 				return
 			}
 			log.Println("HustWebAuth service started.")
-			saveCfg = true
 		},
 	}
 

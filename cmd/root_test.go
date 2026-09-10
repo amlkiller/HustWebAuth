@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseAccountList(t *testing.T) {
@@ -109,3 +113,35 @@ func TestInterfaceAccountsCliPrecedence(t *testing.T) {
 	}
 	assert.Equal(t, "cliUser", accs[0].Account)
 }
+
+func TestSaveConfig_DirectoryCreationAndReset(t *testing.T) {
+	origCfgFile := cfgFile
+	origSaveCfg := saveCfg
+	defer func() {
+		cfgFile = origCfgFile
+		saveCfg = origSaveCfg
+	}()
+
+	tempDir := t.TempDir()
+	nestedFile := filepath.Join(tempDir, "nested", "subdir", "HustWebAuth.yaml")
+	cfgFile = nestedFile
+	saveCfg = true
+
+	viper.Set("auth.account", "saveConfigTestUser")
+
+	// Call saveConfig
+	saveConfig()
+
+	// saveCfg must be reset to false to avoid duplicate writing
+	assert.False(t, saveCfg)
+
+	// File must exist in the created subdirectory
+	content, err := os.ReadFile(nestedFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "saveConfigTestUser")
+
+	// Second call with saveCfg=false must be safe no-op
+	saveConfig()
+	assert.False(t, saveCfg)
+}
+

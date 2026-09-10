@@ -601,10 +601,14 @@ func initConfig() {
 
 func saveConfig() {
 	if saveCfg {
+		if err := os.MkdirAll(filepath.Dir(cfgFile), 0755); err != nil {
+			log.Fatal("Create config dir failed: ", err)
+		}
 		err := viper.WriteConfigAs(cfgFile)
 		if err != nil {
 			log.Fatal(err)
 		}
 		log.Println("Save config file: " + cfgFile)
+		saveCfg = false
 	}
 }
