@@ -11,7 +11,7 @@ import (
 // 获取当前执行文件绝对路径
 func getCurrentAbPath() string {
 	execPath := getCurrentAbPathByExecutable()
-	if strings.Contains(execPath, getTmpDir()) {
+	if strings.Contains(execPath, "go-build") {
 		return getCurrentAbPathByCaller()
 	}
 	return execPath

@@ -99,7 +99,13 @@ var (
 )
 
 var execPath = getCurrentAbPath()
-var _, filenameWithSuffix = filepath.Split(execPath)
+var _, filenameWithSuffix = func() (string, string) {
+	dir, file := filepath.Split(execPath)
+	if strings.HasSuffix(file, ".go") || file == "main" || file == "" {
+		file = "HustWebAuth"
+	}
+	return dir, file
+}()
 var sysType = runtime.GOOS
 var homeDir string
 var homeError error
