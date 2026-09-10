@@ -22,7 +22,7 @@ func initLog() {
 		} else if logAppend {
 			logWriter, err = os.OpenFile(filepath.Join(logDir, logFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		} else {
-			logWriter, err = os.OpenFile(filepath.Join(logDir, logFile), os.O_CREATE|os.O_WRONLY, 0644)
+			logWriter, err = os.OpenFile(filepath.Join(logDir, logFile), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		}
 		if err != nil {
 			log.Fatal("Open log file failed, err:", err)
