@@ -22,6 +22,12 @@ func TestParseAccountList(t *testing.T) {
 	assert.Equal(t, "common_pwd", accsReused[1].Password)
 	assert.Equal(t, "common_pwd", accsReused[2].Password)
 	assert.True(t, *accsReused[0].Encrypt)
+
+	// Single account with comma in password
+	accsCommaPwd := parseAccountList("singleUser", "my,secret,pass", "internet", false)
+	assert.Len(t, accsCommaPwd, 1)
+	assert.Equal(t, "singleUser", accsCommaPwd[0].Account)
+	assert.Equal(t, "my,secret,pass", accsCommaPwd[0].Password)
 }
 
 func TestGetEffectiveAccountsPrecedence(t *testing.T) {

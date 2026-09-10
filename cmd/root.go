@@ -118,19 +118,34 @@ var rootCmd = &cobra.Command{
 }
 
 func parseAccountList(accStr, pwdStr, svcType string, isEncrypt bool) []Account {
-	accList := strings.Split(accStr, ",")
-	pwdList := strings.Split(pwdStr, ",")
+	rawAccList := strings.Split(accStr, ",")
+	var accList []string
+	for _, a := range rawAccList {
+		if trimmed := strings.TrimSpace(a); trimmed != "" {
+			accList = append(accList, trimmed)
+		}
+	}
+	if len(accList) == 0 {
+		return nil
+	}
+
+	var pwdList []string
+	if len(accList) == 1 {
+		// Single account: do not split password by comma to preserve passwords containing commas
+		pwdList = []string{strings.TrimSpace(pwdStr)}
+	} else {
+		for _, p := range strings.Split(pwdStr, ",") {
+			pwdList = append(pwdList, strings.TrimSpace(p))
+		}
+	}
+
 	var list []Account
 	for i, a := range accList {
-		a = strings.TrimSpace(a)
-		if a == "" {
-			continue
-		}
 		p := ""
 		if i < len(pwdList) {
-			p = strings.TrimSpace(pwdList[i])
+			p = pwdList[i]
 		} else if len(pwdList) > 0 {
-			p = strings.TrimSpace(pwdList[len(pwdList)-1])
+			p = pwdList[len(pwdList)-1]
 		}
 		enc := isEncrypt
 		list = append(list, Account{
