@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	urlutil "net/url"
 	"strings"
 	"time"
 
@@ -90,9 +91,9 @@ func loginWithClient(client *http.Client, url string, queryString string, acc Ac
 		svcType = acc.ServiceType
 	}
 
-	data := "userId=" + acc.Account +
-		"&password=" + acc.Password +
-		"&service=" + svcType +
+	data := "userId=" + urlutil.QueryEscape(acc.Account) +
+		"&password=" + urlutil.QueryEscape(acc.Password) +
+		"&service=" + urlutil.QueryEscape(svcType) +
 		"&queryString=" + queryString +
 		"&operatorPwd=&operatorUserId=&validcode=&passwordEncrypt=" + passwordEncrypt
 
@@ -128,7 +129,7 @@ func RegisterMAC(url string, userIndex string, cookie *http.Cookie) (string, err
 // RegisterMACWithClient registers the mac address using the specified client.
 func RegisterMACWithClient(client *http.Client, url string, userIndex string, cookie *http.Cookie) (string, error) {
 	trueurl := strings.Split(url, "/eportal/")[0] + "/eportal/InterFace.do?method=registerMac"
-	data := "mac=&userIndex=" + userIndex
+	data := "mac=&userIndex=" + urlutil.QueryEscape(userIndex)
 	req, err := http.NewRequest("POST", trueurl, strings.NewReader(data))
 	if err != nil {
 		return "", err

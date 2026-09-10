@@ -49,7 +49,10 @@ func TestLoginWithClient(t *testing.T) {
 		assert.NoError(t, err)
 		bodyStr := string(body)
 
-		if strings.Contains(bodyStr, "userId=userSuccess") {
+		if strings.Contains(bodyStr, "password=pwd%2B123%26key%3Dval") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"result":"success","userIndex":"idx_special"}`)
+		} else if strings.Contains(bodyStr, "userId=userSuccess") {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"result":"success","userIndex":"idx12345"}`)
 		} else {
@@ -79,6 +82,15 @@ func TestLoginWithClient(t *testing.T) {
 	}, cookie)
 	require.NoError(t, err)
 	assert.Contains(t, res2, `"result":"fail"`)
+
+	// 3. Special characters escaping case
+	res3, err := loginWithClient(client, server.URL+"/eportal/index.jsp", "wlanuserip=1.2.3.4", Account{
+		Account:     "userSpecial",
+		Password:    "pwd+123&key=val",
+		ServiceType: "internet",
+	}, cookie)
+	require.NoError(t, err)
+	assert.Contains(t, res3, `"result":"success"`)
 }
 
 func TestMultiAccountFailover(t *testing.T) {
