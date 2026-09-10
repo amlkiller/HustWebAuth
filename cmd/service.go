@@ -354,7 +354,7 @@ get_pid() {
 }
 
 is_running() {
-    [ -f "${pid_file}" ] && ps | grep -v grep | grep $(get_pid) >/dev/null 2>&1
+    [ -f "${pid_file}" ] && [ -s "${pid_file}" ] && kill -0 "$(get_pid)" >/dev/null 2>&1
 }
 
 start() {
