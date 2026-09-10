@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -263,7 +264,14 @@ func init() {
 func runInitdCommand(serviceName, action string) (int, error) {
 	confPath := "/etc/init.d/" + serviceName
 	// Pass the script and action as a single string argument.
-	code, _, err := RunCommand("sh", "-c", confPath+" "+action)
+	code, out, err := RunCommand("sh", "-c", confPath+" "+action)
+	if err == nil && code != 0 {
+		outStr := strings.TrimSpace(string(out))
+		if outStr != "" {
+			return code, fmt.Errorf("init.d %s failed with exit code %d: %s", action, code, outStr)
+		}
+		return code, fmt.Errorf("init.d %s failed with exit code %d", action, code)
+	}
 
 	return code, err
 }
