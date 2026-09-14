@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -143,5 +147,134 @@ func TestSaveConfig_DirectoryCreationAndReset(t *testing.T) {
 	// Second call with saveCfg=false must be safe no-op
 	saveConfig()
 	assert.False(t, saveCfg)
+}
+
+func TestRunSingleWorker_ContextCancel(t *testing.T) {
+	origCycleEnable := cycleEnable
+	origCycleDuration := cycleDuration
+	origCheckURL := checkURL
+	defer func() {
+		cycleEnable = origCycleEnable
+		cycleDuration = origCycleDuration
+		checkURL = origCheckURL
+	}()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	cycleEnable = true
+	cycleDuration = 1 * time.Hour
+	checkURL = ts.URL
+
+	cfg := InterfaceConfig{
+		Iface:    "",
+		CheckURL: ts.URL,
+		Accounts: []Account{
+			{Account: "testUser", Password: "testPassword"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runSingleWorker(ctx, cfg, false)
+		close(done)
+	}()
+
+	// Wait briefly to ensure worker executed initial check and entered ticker loop
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// Exited gracefully
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSingleWorker did not exit within timeout after context cancel")
+	}
+}
+
+func TestRunSingleWorker_PreCanceledContext(t *testing.T) {
+	origCycleEnable := cycleEnable
+	defer func() {
+		cycleEnable = origCycleEnable
+	}()
+	cycleEnable = true
+
+	cfg := InterfaceConfig{
+		Iface:    "",
+		Accounts: []Account{{Account: "testUser", Password: "pwd"}},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel before calling worker
+
+	done := make(chan struct{})
+	go func() {
+		runSingleWorker(ctx, cfg, false)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Succeeded immediately without blocking
+	case <-time.After(1 * time.Second):
+		t.Fatal("runSingleWorker blocked on pre-canceled context")
+	}
+}
+
+func TestRunCycleWithContext_MultiWorker_ContextCancel(t *testing.T) {
+	origCycleEnable := cycleEnable
+	origCycleDuration := cycleDuration
+	origIface := iface
+	origConfiguredInterfaces := configuredInterfaces
+	defer func() {
+		cycleEnable = origCycleEnable
+		cycleDuration = origCycleDuration
+		iface = origIface
+		configuredInterfaces = origConfiguredInterfaces
+	}()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	cycleEnable = true
+	cycleDuration = 1 * time.Hour
+	iface = ""
+	configuredInterfaces = []InterfaceConfig{
+		{
+			Iface:    "",
+			CheckURL: ts.URL,
+			Accounts: []Account{{Account: "userA", Password: "pwd"}},
+		},
+		{
+			Iface:    "",
+			CheckURL: ts.URL,
+			Accounts: []Account{{Account: "userB", Password: "pwd"}},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runCycleWithContext(ctx)
+		close(done)
+	}()
+
+	// Wait briefly to ensure concurrent workers started and entered ticker loop
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// All concurrent workers exited gracefully
+	case <-time.After(2 * time.Second):
+		t.Fatal("runCycleWithContext did not return within timeout after cancel")
+	}
 }
 

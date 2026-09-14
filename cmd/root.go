@@ -24,13 +24,16 @@ THE SOFTWARE.
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	daemon "github.com/sevlyar/go-daemon"
@@ -249,12 +252,23 @@ func runDaemon() {
 
 		log.Println("- - - - - - - - - - - - - - - - - - -")
 		log.Println("HustWebAuth Daemon started.")
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		runCycleWithContext(ctx)
+		return
 	}
 
 	runCycle()
 }
 
 func runCycle() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	runCycleWithContext(ctx)
+}
+
+func runCycleWithContext(ctx context.Context) {
 	log.Println("- - - - - - - - - - - - - - - - - - -")
 	log.Println("HustWebAuth started.")
 
@@ -266,7 +280,7 @@ func runCycle() {
 			wg.Add(1)
 			go func(cfg InterfaceConfig) {
 				defer wg.Done()
-				runSingleWorker(cfg, true)
+				runSingleWorker(ctx, cfg, true)
 			}(ifcConfig)
 		}
 		wg.Wait()
@@ -299,16 +313,23 @@ func runCycle() {
 			}
 		}
 	}
-	runSingleWorker(defaultCfg, false)
+	runSingleWorker(ctx, defaultCfg, false)
 }
 
-func runSingleWorker(cfg InterfaceConfig, isMultiWorker bool) {
+func runSingleWorker(ctx context.Context, cfg InterfaceConfig, isMultiWorker bool) {
 	tag := ifaceTag(cfg.Iface)
 	pool := NewAccountPool(cfg.Accounts, cfg.Cooldown, cfg.MaxCooldown)
 	pool.SetRotation(rotationEnable)
 
 	log.Printf("[%s] Worker initialized with %d account(s), base cooldown: %s, max cooldown: %s\n",
 		tag, pool.AccountsCount(), cfg.Cooldown, cfg.MaxCooldown)
+
+	select {
+	case <-ctx.Done():
+		log.Printf("[%s] Worker stopped gracefully.\n", tag)
+		return
+	default:
+	}
 
 	retryCount := 0
 	res, err := LoginWithInterface(cfg.Iface, pool, register, cfg.GetCheckURL())
@@ -346,31 +367,37 @@ func runSingleWorker(cfg InterfaceConfig, isMultiWorker bool) {
 	if cycleEnable {
 		eventsTick := time.NewTicker(cycleDuration)
 		defer eventsTick.Stop()
-		for range eventsTick.C {
-			res, err := LoginWithInterface(cfg.Iface, pool, false, cfg.GetCheckURL())
-			if err != nil {
-				if strings.Contains(err.Error(), "in cooldown") {
-					log.Printf("[%s] %v, waiting for cooldown to expire...\n", tag, err)
-				} else if cycleRetry < 0 {
-					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
-					log.Printf("[%s] Login retrying...\n", tag)
-				} else if retryCount < cycleRetry {
-					retryCount++
-					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
-					log.Printf("[%s] Login retry %d times after %s\n", tag, retryCount, cycleDuration)
-				} else {
-					log.Printf("[%s] Login failed, Err: %v\n", tag, err)
-					log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
-					if !isMultiWorker {
-						os.Exit(1)
+		for {
+			select {
+			case <-ctx.Done():
+				log.Printf("[%s] Worker stopped gracefully.\n", tag)
+				return
+			case <-eventsTick.C:
+				res, err := LoginWithInterface(cfg.Iface, pool, false, cfg.GetCheckURL())
+				if err != nil {
+					if strings.Contains(err.Error(), "in cooldown") {
+						log.Printf("[%s] %v, waiting for cooldown to expire...\n", tag, err)
+					} else if cycleRetry < 0 {
+						log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+						log.Printf("[%s] Login retrying...\n", tag)
+					} else if retryCount < cycleRetry {
+						retryCount++
+						log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+						log.Printf("[%s] Login retry %d times after %s\n", tag, retryCount, cycleDuration)
+					} else {
+						log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+						log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
+						if !isMultiWorker {
+							os.Exit(1)
+						}
+						return
 					}
-					return
+				} else {
+					if res != "" {
+						log.Printf("[%s] %s\n", tag, res)
+					}
+					retryCount = 0
 				}
-			} else {
-				if res != "" {
-					log.Printf("[%s] %s\n", tag, res)
-				}
-				retryCount = 0
 			}
 		}
 	}

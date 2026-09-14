@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kardianos/service"
@@ -15,8 +17,9 @@ import (
 )
 
 type program struct {
-	// cmd  *cobra.Command
-	// args []string
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 var customServiceName string

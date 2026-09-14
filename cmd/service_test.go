@@ -2,13 +2,17 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 
 	"github.com/kardianos/service"
 	"github.com/stretchr/testify/assert"
@@ -452,5 +456,122 @@ func TestRunInitdCommand_NonExistentScript(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, 127, code)
 	assert.Contains(t, err.Error(), "exit code 127")
+}
+
+func TestProgram_StartStopLifecycle(t *testing.T) {
+	origCycleEnable := cycleEnable
+	origCycleDuration := cycleDuration
+	origCheckURL := checkURL
+	origIface := iface
+	origConfiguredInterfaces := configuredInterfaces
+	defer func() {
+		cycleEnable = origCycleEnable
+		cycleDuration = origCycleDuration
+		checkURL = origCheckURL
+		iface = origIface
+		configuredInterfaces = origConfiguredInterfaces
+	}()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	cycleEnable = true
+	cycleDuration = 1 * time.Hour
+	checkURL = ts.URL
+	iface = ""
+	configuredInterfaces = nil
+
+	prg := &program{}
+	err := prg.Start(nil)
+	require.NoError(t, err)
+	require.NotNil(t, prg.ctx)
+	require.NotNil(t, prg.cancel)
+	assert.NoError(t, prg.ctx.Err())
+
+	// Wait briefly to allow worker goroutine to start and enter ticker loop
+	time.Sleep(50 * time.Millisecond)
+
+	stopDone := make(chan struct{})
+	go func() {
+		stopErr := prg.Stop(nil)
+		assert.NoError(t, stopErr)
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		// Graceful stop completed
+	case <-time.After(2 * time.Second):
+		t.Fatal("program.Stop timed out; worker goroutine did not exit gracefully")
+	}
+
+	assert.ErrorIs(t, prg.ctx.Err(), context.Canceled)
+}
+
+func TestProgram_StopWithoutStart(t *testing.T) {
+	prg := &program{}
+	err := prg.Stop(nil)
+	assert.NoError(t, err)
+}
+
+func TestProgram_StartStop_MultiWorker(t *testing.T) {
+	origCycleEnable := cycleEnable
+	origCycleDuration := cycleDuration
+	origCheckURL := checkURL
+	origIface := iface
+	origConfiguredInterfaces := configuredInterfaces
+	defer func() {
+		cycleEnable = origCycleEnable
+		cycleDuration = origCycleDuration
+		checkURL = origCheckURL
+		iface = origIface
+		configuredInterfaces = origConfiguredInterfaces
+	}()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	cycleEnable = true
+	cycleDuration = 1 * time.Hour
+	checkURL = ts.URL
+	iface = ""
+	configuredInterfaces = []InterfaceConfig{
+		{
+			Iface:    "",
+			CheckURL: ts.URL,
+			Accounts: []Account{{Account: "user1", Password: "pwd"}},
+		},
+		{
+			Iface:    "",
+			CheckURL: ts.URL,
+			Accounts: []Account{{Account: "user2", Password: "pwd"}},
+		},
+	}
+
+	prg := &program{}
+	err := prg.Start(nil)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	stopDone := make(chan struct{})
+	go func() {
+		stopErr := prg.Stop(nil)
+		assert.NoError(t, stopErr)
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		// All concurrent workers stopped gracefully
+	case <-time.After(2 * time.Second):
+		t.Fatal("program.Stop timed out waiting for multiple workers to exit")
+	}
+
+	assert.ErrorIs(t, prg.ctx.Err(), context.Canceled)
 }
 
