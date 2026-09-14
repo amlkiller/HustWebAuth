@@ -12,6 +12,11 @@ import (
 	_ "time/tzdata"
 )
 
+var (
+	reTZInformal = regexp.MustCompile(`^(?i)(UTC|GMT)\s*([+-])\s*(\d{1,2})(?::(\d{1,2}))?$`)
+	reTZPosix    = regexp.MustCompile(`^([A-Za-z]{3,})([+-]?\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?`)
+)
+
 // parsePosixTZ parses a POSIX-style timezone string (e.g. "CST-8", "EST5EDT", "GMT-8", "UTC+8")
 // or standard IANA location name (e.g. "Asia/Shanghai") and returns a *time.Location.
 func parsePosixTZ(tz string) *time.Location {
@@ -26,8 +31,7 @@ func parsePosixTZ(tz string) *time.Location {
 	}
 
 	// 2. Handle informal "UTC+8", "UTC-8", "GMT+8", "GMT-8"
-	reInformal := regexp.MustCompile(`^(?i)(UTC|GMT)\s*([+-])\s*(\d{1,2})(?::(\d{1,2}))?$`)
-	if m := reInformal.FindStringSubmatch(tz); len(m) > 0 {
+	if m := reTZInformal.FindStringSubmatch(tz); len(m) > 0 {
 		name := strings.ToUpper(m[1])
 		sign := m[2]
 		hours, _ := strconv.Atoi(m[3])
@@ -47,8 +51,7 @@ func parsePosixTZ(tz string) *time.Location {
 	// Therefore: Local + offset = UTC  =>  Local = UTC - offset.
 	// For instance, "CST-8" means offset is -8 hours, so Local is UTC - (-8h) = UTC + 8 hours (+28800s).
 	// "EST5EDT" means offset is +5 hours, so Local is UTC - 5h (-18000s).
-	rePosix := regexp.MustCompile(`^([A-Za-z]{3,})([+-]?\d{1,2})(?::(\d{1,2}))?(?::(\d{1,2}))?`)
-	if m := rePosix.FindStringSubmatch(tz); len(m) > 0 {
+	if m := reTZPosix.FindStringSubmatch(tz); len(m) > 0 {
 		name := m[1]
 		hours, _ := strconv.Atoi(m[2])
 		mins := 0

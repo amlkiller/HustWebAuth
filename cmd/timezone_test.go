@@ -105,3 +105,25 @@ func TestInitTimezone_FromEnv(t *testing.T) {
 	_, offset := now.Zone()
 	assert.Equal(t, 8*3600, offset)
 }
+
+func BenchmarkParsePosixTZ(b *testing.B) {
+	testCases := []string{
+		"Asia/Shanghai",
+		"CST-8",
+		"CST-8CDT",
+		"UTC+8",
+		"GMT+8",
+		"EST5EDT",
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = parsePosixTZ(tc)
+			}
+		})
+	}
+}
+
