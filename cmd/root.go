@@ -384,6 +384,8 @@ func Execute() {
 }
 
 func init() {
+	initTimezone()
+	cobra.OnInitialize(initTimezone)
 	cobra.OnInitialize(initHomeDir)
 	cobra.OnInitialize(initConfig)
 	cobra.OnInitialize(initLog)

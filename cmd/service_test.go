@@ -171,6 +171,31 @@ func TestNewSVCConfig_Options(t *testing.T) {
 	}
 }
 
+func TestServiceCmd_InteractiveHelp(t *testing.T) {
+	// Verify runCmd exists and is hidden
+	foundRun := false
+	for _, sub := range serviceCmd.Commands() {
+		if sub.Name() == "run" {
+			foundRun = true
+			assert.True(t, sub.Hidden)
+			break
+		}
+	}
+	assert.True(t, foundRun, "service run subcommand should be registered")
+
+	// Verify executing serviceCmd directly in test (interactive environment) returns nil
+	var buf bytes.Buffer
+	serviceCmd.SetOut(&buf)
+	err := serviceCmd.RunE(serviceCmd, []string{})
+	assert.NoError(t, err)
+	output := buf.String()
+	assert.Contains(t, output, "Available Commands:")
+	assert.Contains(t, output, "install")
+	assert.Contains(t, output, "start")
+	assert.Contains(t, output, "status")
+	assert.NotContains(t, output, "\n  run ") // run subcommand is hidden from available commands
+}
+
 func TestReadTailLines(t *testing.T) {
 	tempDir := t.TempDir()
 	logPath := tempDir + "/test_tail.log"

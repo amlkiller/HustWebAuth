@@ -36,7 +36,7 @@ func newSVCConfig() *service.Config {
 		}
 	}
 
-	args := []string{"service"}
+	args := []string{"service", "run"}
 	if cfgFile != "" {
 		args = append(args, "-f", cfgFile)
 	}
@@ -50,12 +50,19 @@ func newSVCConfig() *service.Config {
 		args = append(args, "-c")
 	}
 
+	envVars := map[string]string{"HOME": homeDir}
+	if tz := os.Getenv("TZ"); tz != "" {
+		envVars["TZ"] = tz
+	} else if time.Local != nil && time.Local != time.UTC {
+		envVars["TZ"] = time.Local.String()
+	}
+
 	c := &service.Config{
 		Name:        name,
 		DisplayName: name,
 		Description: "A service used to implement Ruijie web authentication.",
 		Arguments:   args,
-		EnvVars:     map[string]string{"HOME": homeDir},
+		EnvVars:     envVars,
 		Option:      service.KeyValue{"LogOutput": logOutput, "LogDirectory": logDir},
 	}
 
@@ -91,6 +98,25 @@ var (
 		Use:   "service",
 		Short: "System service related commands",
 		Long:  `Use HustWebAuth as a system service: install, start, stop, uninstall, etc.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !service.Interactive() {
+				if !rootCmd.PersistentFlags().Lookup("cycle").Changed && !viper.IsSet("cycle.enable") {
+					cycleEnable = true
+				}
+				s, err := newSVC(&program{}, newSVCConfig())
+				if err != nil {
+					return err
+				}
+				return s.Run()
+			}
+			return cmd.Help()
+		},
+	}
+
+	runCmd = &cobra.Command{
+		Use:    "run",
+		Short:  "Run HustWebAuth service worker (used by service manager)",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !rootCmd.PersistentFlags().Lookup("cycle").Changed && !viper.IsSet("cycle.enable") {
 				cycleEnable = true
@@ -318,7 +344,7 @@ var (
 func init() {
 	rootCmd.AddCommand(serviceCmd)
 	serviceCmd.PersistentFlags().StringVar(&customServiceName, "name", "", "Custom service name (default HustWebAuth or HustWebAuth_<iface>)")
-	serviceCmd.AddCommand(installCmd, startCmd, statusCmd, stopCmd, restartCmd, uninstallCmd)
+	serviceCmd.AddCommand(installCmd, startCmd, statusCmd, stopCmd, restartCmd, uninstallCmd, runCmd)
 }
 
 // runInitdCommand runs init.d service command
@@ -558,6 +584,7 @@ start() {
         echo "Starting $name"
         {{if .WorkingDirectory}}cd '{{.WorkingDirectory}}'{{end}}
         mkdir -p "{{.LogDirectory}}"
+        [ -f /etc/TZ ] && export TZ="$(cat /etc/TZ)"
         eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"
         echo $! > "$pid_file"
         sleep 1
@@ -660,6 +687,7 @@ case "$1" in
             echo "Starting $name"
             {{if .WorkingDirectory}}cd '{{.WorkingDirectory}}'{{end}}
             mkdir -p "{{.LogDirectory}}"
+            [ -f /etc/TZ ] && export TZ="$(cat /etc/TZ)"
             eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"
             echo $! > "$pid_file"
             sleep 1
