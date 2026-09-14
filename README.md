@@ -19,7 +19,10 @@ Web认证
 - **单线多拨与网口绑定 (`-i, --iface`)**：支持为指定网口（如 `vwan1`、`macvlan0`）绑定出站流量，支持单线多拨多账号并发登录。
 - **多账号轮转登录**：支持多账号备用池，登录失败自动无缝平滑切换下一个可用账号。
 - **指数规避冷却机制 (Exponential Backoff)**：智能检测账号被实体终端（手机/电脑）挤下线或认证失败，依连续失败次数指数级延长冷却时间（$T_{\text{base}} \times 2^n$），彻底杜绝与实体设备互相挤占争抢的死循环。
-- **守护进程与系统服务集成**：内置后台 Daemon 轮询探测，支持一键安装为 systemd 或 OpenWrt procd/init.d 系统服务开机自启。
+- **HTTP 连接池复用与高性能保活**：底层 Transport 与连接池自动复用，持久保持 TCP Keep-Alive 与 TLS Session Cache，消除高频探测与登录重试中的握手延迟及内核 `TIME_WAIT` 堆积。
+- **守护进程与系统服务集成**：内置后台 Daemon 轮询探测，支持一键安装为 systemd 或 OpenWrt procd/init.d 系统服务开机自启；支持 `service status` 实时查看进程 PID 与最近 10 行运行日志。
+- **基于 Context 的优雅停机 (Graceful Shutdown)**：全面监听系统停机信号（`SIGINT`/`SIGTERM`），毫秒级安全退出工作协程，自动回收连接池并清理 PID 文件，避免孤儿进程与服务停止被超时强杀。
+- **嵌入式环境与时区自适应**：内置嵌入时区数据并自适应 OpenWrt `/etc/TZ`、UCI 配置与 POSIX 时区（`CST-8` 等），彻底解决嵌入式无 zoneinfo 环境下日志时区慢 8 小时的问题。
 - **MAC 无感认证绑定**：支持 `-r, --register` 自动将设备 MAC 地址绑定至锐捷 Portal，后续连接免密直连。
 
 使用方法
@@ -82,6 +85,7 @@ Web认证
     # 网络与接口绑定
     net:
       iface: "vwan1"                 # 绑定的网卡或虚拟网口 (如 eth0, vwan1, macvlan0)
+      insecure: true                 # 是否允许跳过 TLS 证书合法性校验 (默认 true，兼容老旧校园网认证服务器)
 
     # (可选) 单线多拨多网口集中配置
     # 当 net.iface 为空且配置了 interfaces 时，程序将为每个网口启动独立并发 Worker 协程
@@ -169,6 +173,7 @@ Flags:
   -e, --encrypt                  Password is encrypted or not (default false)
   -h, --help                     help for HustWebAuth
   -i, --iface string             Network interface or IP address to bind (e.g. eth0, vwan1, 10.0.0.2)
+  -k, --insecure                 Allow insecure server connections when using SSL (default true)
       --logAppend                Log file append mode. 
                                  NOTE: if logRandom is true, it will be ignored (default true)
       --logConnected             Enable logging of "The network is connected" (default true)
@@ -181,7 +186,11 @@ Flags:
   -p, --password string          Password(s) for authentication (comma-separated)
       --pingCount int            ping count (deprecated) (default 3)
       --pingIP string            IP address to ping (deprecated, please use --checkURL) (default "202.114.0.131")
-      --pingPrivilege            Sets the type of ping pinger will send (deprecated). (default true)
+      --pingPrivilege            Sets the type of ping pinger will send (deprecated).
+                                 false means pinger will send an "unprivileged" UDP ping.
+                                 true means pinger will send a "privileged" raw ICMP ping.
+                                 NOTE: setting to true requires that it be run with super-user privileges.
+                                  (default true)
       --pingTimeout duration     Ping timeout (deprecated) (default 3s)
       --redirectURL string       Redirect URL (default "http://123.123.123.123")
       --rotation                 Enable multi-account rotation (default true)
@@ -213,6 +222,44 @@ Available Commands:
 Flags:
   -h, --help          help for service
       --name string   Custom service name (default HustWebAuth or HustWebAuth_<iface>)
+
+Global Flags:
+  -a, --account string           Account(s) for authentication (comma-separated for multi-account)
+      --checkTimeout duration    Timeout for connectivity check (default 5s)
+      --checkURL string          URL endpoint for HTTP 204 connectivity check (default "http://connect.rom.miui.com/generate_204")
+  -f, --config string            Config file (default is $HOME/HustWebAuth.yaml)
+      --cooldown duration        Base cooldown duration for exponential backoff (default 4m59s)
+  -c, --cycle                    Enable cycle mode
+      --cycleDuration duration   Cycle duration (default 5m0s)
+      --cycleRetry int           Cycle retry times, -1 means retry forever (default 3)
+  -d, --daemon                   Enable daemon mode, not support windows
+      --daemonPidFile string     Daemon pid file
+  -e, --encrypt                  Password is encrypted or not (default false)
+  -i, --iface string             Network interface or IP address to bind (e.g. eth0, vwan1, 10.0.0.2)
+  -k, --insecure                 Allow insecure server connections when using SSL (default true)
+      --logAppend                Log file append mode. 
+                                 NOTE: if logRandom is true, it will be ignored (default true)
+      --logConnected             Enable logging of "The network is connected" (default true)
+      --logDir string            Log Directory (default "/tmp/HustWebAuth")
+  -l, --logFile string           Log file name (default means output to os.stdout)
+      --logRandom                Log file name with random string.
+                                 NOTE: If logFile includes a "*", the random string replaces the last "*".
+                                  (default true)
+      --maxCooldown duration     Max cooldown duration for exponential backoff (default 2h0m0s)
+  -p, --password string          Password(s) for authentication (comma-separated)
+      --pingCount int            ping count (deprecated) (default 3)
+      --pingIP string            IP address to ping (deprecated, please use --checkURL) (default "202.114.0.131")
+      --pingPrivilege            Sets the type of ping pinger will send (deprecated).
+                                 false means pinger will send an "unprivileged" UDP ping.
+                                 true means pinger will send a "privileged" raw ICMP ping.
+                                 NOTE: setting to true requires that it be run with super-user privileges.
+                                  (default true)
+      --pingTimeout duration     Ping timeout (deprecated) (default 3s)
+      --redirectURL string       Redirect URL (default "http://123.123.123.123")
+      --rotation                 Enable multi-account rotation (default true)
+  -o, --save                     Save config file
+  -s, --serviceType string       Service type, options: [internet, local] (default "internet")
+      --syslog                   Enable syslog, not support windows
 
 Use "HustWebAuth service [command] --help" for more information about a command.
 ```
