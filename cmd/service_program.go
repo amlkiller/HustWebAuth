@@ -19,5 +19,6 @@ func (p *program) run() {
 
 func (p *program) Stop(service.Service) error {
 	log.Println("Stopping HustWebAuth service...")
+	CloseIdleHTTPConnections()
 	return nil
 }

@@ -81,12 +81,9 @@ func GetLoginUrlWithInterface(ifaceName string, targetCheckURL ...string) (strin
 		timeout = 5 * time.Second
 	}
 
-	client, err := NewHTTPClient(ifaceName, timeout)
+	client, err := GetHTTPClient(ifaceName, timeout, false)
 	if err != nil {
 		return "", "", false, err
-	}
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
 	}
 
 	// 1. Probe connectivity using HTTP 204 endpoint bound to the interface

@@ -7,8 +7,22 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
+)
+
+// transportKey uniquely identifies a cached *http.Transport instance.
+type transportKey struct {
+	iface    string
+	timeout  time.Duration
+	insecure bool
+}
+
+var (
+	transportPool = make(map[transportKey]*http.Transport)
+	transportMu   sync.RWMutex
 )
 
 // allCipherSuites contains all supported cipher suites (both modern and legacy/insecure ones).
@@ -101,10 +115,33 @@ func ResolveInterface(ifaceSpec string) (ifaceName string, ip net.IP, err error)
 	return ifaceName, ip, nil
 }
 
-// NewHTTPClient returns an *http.Client bound to the specified interface and with the given timeout.
-func NewHTTPClient(iface string, timeout time.Duration) (*http.Client, error) {
+// GetOrCreateHTTPTransport retrieves an existing *http.Transport from the pool or creates a new one.
+// The transport is thread-safe and reuses underlying TCP connections, TLS sessions, and socket bindings.
+func GetOrCreateHTTPTransport(iface string, timeout time.Duration) (*http.Transport, error) {
+	iface = strings.TrimSpace(iface)
 	if timeout <= 0 {
 		timeout = 10 * time.Second
+	}
+
+	key := transportKey{
+		iface:    iface,
+		timeout:  timeout,
+		insecure: insecure,
+	}
+
+	transportMu.RLock()
+	tr, ok := transportPool[key]
+	transportMu.RUnlock()
+	if ok {
+		return tr, nil
+	}
+
+	transportMu.Lock()
+	defer transportMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if tr, ok := transportPool[key]; ok {
+		return tr, nil
 	}
 
 	ifaceName, ip, err := ResolveInterface(iface)
@@ -147,14 +184,64 @@ func NewHTTPClient(iface string, timeout time.Duration) (*http.Client, error) {
 		DialContext:           dialer.DialContext,
 		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   timeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig:       GetDefaultTLSConfig(),
 	}
 
-	return &http.Client{
-		Transport: transport,
+	transportPool[key] = transport
+	return transport, nil
+}
+
+// GetHTTPClient returns an *http.Client configured with the specified interface, timeout,
+// and redirect behavior, backed by a cached and reused *http.Transport connection pool.
+func GetHTTPClient(iface string, timeout time.Duration, followRedirect bool) (*http.Client, error) {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	tr, err := GetOrCreateHTTPTransport(iface, timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{
+		Transport: tr,
 		Timeout:   timeout,
-	}, nil
+	}
+
+	if !followRedirect {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+
+	return client, nil
+}
+
+// NewHTTPClient returns an *http.Client bound to the specified interface and with the given timeout.
+// It maintains backward compatibility while reusing the underlying *http.Transport connection pool.
+func NewHTTPClient(iface string, timeout time.Duration) (*http.Client, error) {
+	return GetHTTPClient(iface, timeout, true)
+}
+
+// CloseIdleHTTPConnections closes all idle connections in all cached transports.
+func CloseIdleHTTPConnections() {
+	transportMu.Lock()
+	defer transportMu.Unlock()
+	for _, tr := range transportPool {
+		tr.CloseIdleConnections()
+	}
+}
+
+// ResetHTTPTransportPool closes all idle connections and clears the transport pool (mainly for testing/cleanup).
+func ResetHTTPTransportPool() {
+	transportMu.Lock()
+	defer transportMu.Unlock()
+	for _, tr := range transportPool {
+		tr.CloseIdleConnections()
+	}
+	transportPool = make(map[transportKey]*http.Transport)
 }

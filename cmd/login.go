@@ -50,7 +50,7 @@ func ifaceTag(ifaceName string) string {
 
 // GetCookie gets cookie of the auth page using the default client.
 func GetCookie(url string) (*http.Cookie, error) {
-	client, err := NewHTTPClient(iface, 5*time.Second)
+	client, err := GetHTTPClient(iface, 5*time.Second, true)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func loginWithClient(client *http.Client, url string, queryString string, acc Ac
 
 // RegisterMAC registers the mac address, only for the first time.
 func RegisterMAC(url string, userIndex string, cookie *http.Cookie) (string, error) {
-	client, err := NewHTTPClient(iface, 5*time.Second)
+	client, err := GetHTTPClient(iface, 5*time.Second, true)
 	if err != nil {
 		return "", err
 	}
@@ -185,7 +185,7 @@ func LoginWithInterface(ifaceName string, pool *AccountPool, doRegister bool, ta
 		pool.MarkKicked()
 	}
 
-	client, err := NewHTTPClient(ifaceName, 10*time.Second)
+	client, err := GetHTTPClient(ifaceName, 10*time.Second, true)
 	if err != nil {
 		return "", fmt.Errorf("[%s] failed to create HTTP client: %w", ifaceTag(ifaceName), err)
 	}

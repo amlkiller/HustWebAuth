@@ -242,6 +242,7 @@ func runDaemon() {
 			return
 		}
 		defer func() {
+			CloseIdleHTTPConnections()
 			cntxt.Release()
 			log.Println("HustWebAuth Daemon stopped.")
 		}()
@@ -390,6 +391,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 	cobra.OnInitialize(initLog)
 	cobra.OnFinalize(saveConfig)
+	cobra.OnFinalize(CloseIdleHTTPConnections)
 
 	rootCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		// Validate that at least one account or interface is configured
