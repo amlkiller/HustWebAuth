@@ -64,9 +64,11 @@ func newSVCConfig() *service.Config {
 		}
 	}
 
-	// Use different scripts on OpenWrt and FreeBSD.
+	// Use different scripts on OpenWrt and Linux sysv.
 	if IsOpenWrt() {
 		c.Option["SysvScript"] = openWrtScript
+	} else if sysType == "linux" {
+		c.Option["SysvScript"] = linuxSysvScript
 	}
 
 	return c
@@ -127,10 +129,12 @@ var (
 			}
 			log.Println("HustWebAuth service has been installed")
 
-			// Save configuration to disk BEFORE starting the service to avoid race conditions
-			// where the newly launched service reads an uncreated or incomplete config file.
-			saveCfg = true
-			saveConfig()
+			// Save configuration to disk BEFORE starting the service if not already existing,
+			// to avoid race conditions where the newly launched service reads a nonexistent file.
+			if _, err := os.Stat(cfgFile); os.IsNotExist(err) || saveCfg {
+				saveCfg = true
+				saveConfig()
+			}
 
 			err = svcAction(s, "start")
 			if err != nil {
@@ -138,6 +142,10 @@ var (
 				return
 			}
 			log.Println("HustWebAuth service started.")
+			if IsOpenWrt() || sysType == "linux" {
+				log.Printf("Service stdout log: %s\n", filepath.Join(logDir, s.String()+".log"))
+				log.Printf("Service stderr log: %s\n", filepath.Join(logDir, s.String()+".err"))
+			}
 		},
 	}
 
@@ -151,12 +159,24 @@ var (
 				return
 			}
 
+			if IsOpenWrt() {
+				confPath := "/etc/init.d/" + s.String()
+				if _, err := os.Stat(confPath); os.IsNotExist(err) {
+					log.Fatalf("HustWebAuth service is not installed (script %s not found). Please run '%s service install' first.", confPath, filenameWithSuffix)
+					return
+				}
+			}
+
 			err = svcAction(s, "start")
 			if err != nil {
 				log.Fatal(err)
 				return
 			}
 			log.Println("HustWebAuth service started.")
+			if IsOpenWrt() || sysType == "linux" {
+				log.Printf("Service stdout log: %s\n", filepath.Join(logDir, s.String()+".log"))
+				log.Printf("Service stderr log: %s\n", filepath.Join(logDir, s.String()+".err"))
+			}
 		},
 	}
 
@@ -196,12 +216,21 @@ var (
 				log.Fatal(err)
 				return
 			}
+
+			if IsOpenWrt() {
+				confPath := "/etc/init.d/" + s.String()
+				if _, err := os.Stat(confPath); os.IsNotExist(err) {
+					log.Fatalf("HustWebAuth service is not installed (script %s not found).", confPath)
+					return
+				}
+			}
+
 			err = svcAction(s, "stop")
 			if err != nil {
 				log.Fatal(err)
 				return
 			}
-			log.Println("HustWebAuth service stoped.")
+			log.Println("HustWebAuth service stopped.")
 		},
 	}
 
@@ -214,12 +243,25 @@ var (
 				log.Fatal(err)
 				return
 			}
+
+			if IsOpenWrt() {
+				confPath := "/etc/init.d/" + s.String()
+				if _, err := os.Stat(confPath); os.IsNotExist(err) {
+					log.Fatalf("HustWebAuth service is not installed (script %s not found). Please run '%s service install' first.", confPath, filenameWithSuffix)
+					return
+				}
+			}
+
 			err = svcAction(s, "restart")
 			if err != nil {
 				log.Fatal(err)
 				return
 			}
 			log.Println("HustWebAuth service has been restarted.")
+			if IsOpenWrt() || sysType == "linux" {
+				log.Printf("Service stdout log: %s\n", filepath.Join(logDir, s.String()+".log"))
+				log.Printf("Service stderr log: %s\n", filepath.Join(logDir, s.String()+".err"))
+			}
 		},
 	}
 
@@ -333,14 +375,13 @@ func svcStatus(s service.Service) (status service.Status, err error) {
 	return status, err
 }
 
-// OpenWrt procd init script
-// https://github.com/AdguardTeam/AdGuardHome/issues/1386
+// OpenWrt init script (compatible with OpenWrt, ImmortalWrt, and LEDE)
 const openWrtScript = `#!/bin/sh /etc/rc.common
 
 START=90
 STOP=01
 
-cmd="{{.Path}}{{range .Arguments}} {{.|cmd}}{{end}}"
+cmd='{{.Path|cmd}}{{range .Arguments}} {{.|cmd}}{{end}}'
 name="{{.Name}}"
 pid_file="/var/run/${name}.pid"
 stdout_log="{{.LogDirectory}}/$name.log"
@@ -367,9 +408,10 @@ start() {
     else
         echo "Starting $name"
         {{if .WorkingDirectory}}cd '{{.WorkingDirectory}}'{{end}}
-        mkdir -p {{.LogDirectory}}
-        $cmd >> "$stdout_log" 2>> "$stderr_log" &
+        mkdir -p "{{.LogDirectory}}"
+        eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"
         echo $! > "$pid_file"
+        sleep 1
         if ! is_running; then
             echo "Unable to start, see $stdout_log and $stderr_log"
             exit 1
@@ -380,8 +422,8 @@ start() {
 stop() {
     if is_running; then
         echo -n "Stopping $name.."
-        kill $(get_pid)
-        for i in $(seq 1 10)
+        kill $(get_pid) 2>/dev/null
+        for i in 1 2 3 4 5 6 7 8 9 10
         do
             if ! is_running; then
                 break
@@ -396,7 +438,7 @@ stop() {
         else
             echo "Stopped"
             if [ -f "$pid_file" ]; then
-                rm "$pid_file"
+                rm -f "$pid_file"
             fi
         fi
     else
@@ -421,5 +463,109 @@ status() {
         exit 1
     fi
 }
+`
 
+// Generic Linux sysv init script with eval command execution fix
+const linuxSysvScript = `#!/bin/sh
+# For RedHat, Debian and cousins:
+# chkconfig: - 99 01
+# description: {{.Description}}
+# processname: {{.Path}}
+
+### BEGIN INIT INFO
+# Provides:          {{.Path}}
+# Required-Start:
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: {{.DisplayName}}
+# Description:       {{.Description}}
+### END INIT INFO
+
+cmd='{{.Path|cmd}}{{range .Arguments}} {{.|cmd}}{{end}}'
+
+name=$(basename $(readlink -f $0))
+pid_file="/var/run/$name.pid"
+stdout_log="{{.LogDirectory}}/$name.log"
+stderr_log="{{.LogDirectory}}/$name.err"
+
+{{range $k, $v := .EnvVars -}}
+export {{$k}}={{$v}}
+{{end -}}
+
+[ -e /etc/sysconfig/$name ] && . /etc/sysconfig/$name
+
+get_pid() {
+    cat "$pid_file"
+}
+
+is_running() {
+    [ -f "$pid_file" ] && cat /proc/$(get_pid)/stat > /dev/null 2>&1
+}
+
+case "$1" in
+    start)
+        if is_running; then
+            echo "Already started"
+        else
+            echo "Starting $name"
+            {{if .WorkingDirectory}}cd '{{.WorkingDirectory}}'{{end}}
+            mkdir -p "{{.LogDirectory}}"
+            eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"
+            echo $! > "$pid_file"
+            sleep 1
+            if ! is_running; then
+                echo "Unable to start, see $stdout_log and $stderr_log"
+                exit 1
+            fi
+        fi
+    ;;
+    stop)
+        if is_running; then
+            echo -n "Stopping $name.."
+            kill $(get_pid) 2>/dev/null
+            for i in 1 2 3 4 5 6 7 8 9 10
+            do
+                if ! is_running; then
+                    break
+                fi
+                echo -n "."
+                sleep 1
+            done
+            echo
+            if is_running; then
+                echo "Not stopped; may still be shutting down or shutdown may have failed"
+                exit 1
+            else
+                echo "Stopped"
+                if [ -f "$pid_file" ]; then
+                    rm -f "$pid_file"
+                fi
+            fi
+        else
+            echo "Not running"
+        fi
+    ;;
+    restart)
+        $0 stop
+        if is_running; then
+            echo "Unable to stop, will not attempt to start"
+            exit 1
+        fi
+        $0 start
+    ;;
+    status)
+        if is_running; then
+            echo "Running"
+        else
+            echo "Stopped"
+            exit 1
+        fi
+    ;;
+    *)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac
+exit 0
 `

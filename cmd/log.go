@@ -12,6 +12,11 @@ import (
 )
 
 func initLog() {
+	if isServiceControlCommand() {
+		log.SetOutput(os.Stderr)
+		return
+	}
+
 	logWriter := os.Stderr
 	if logFile != "" {
 		targetDir := logDir

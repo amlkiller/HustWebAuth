@@ -18,6 +18,6 @@ func (p *program) run() {
 }
 
 func (p *program) Stop(service.Service) error {
-	log.Println("Stoping HustWebAuth service...")
+	log.Println("Stopping HustWebAuth service...")
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 
 	"github.com/AdguardTeam/golibs/mathutil"
@@ -47,3 +48,22 @@ func IsOpenWrt() (ok bool) {
 func RootDirFS() (fsys fs.FS) {
 	return rootDirFS()
 }
+
+// isServiceControlCommand checks if the current process was invoked
+// for a transient service management action (install, start, stop, etc.)
+func isServiceControlCommand() bool {
+	if len(os.Args) < 2 {
+		return false
+	}
+	for i, arg := range os.Args {
+		if arg == "service" && i+1 < len(os.Args) {
+			action := os.Args[i+1]
+			switch action {
+			case "start", "stop", "restart", "status", "install", "uninstall":
+				return true
+			}
+		}
+	}
+	return false
+}
+

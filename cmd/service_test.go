@@ -1,0 +1,172 @@
+package cmd
+
+import (
+	"bytes"
+	"os"
+	"strings"
+	"testing"
+	"text/template"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestServiceScript_EvalExecution(t *testing.T) {
+	// Verify that openWrtScript contains eval execution and sleep check
+	assert.Contains(t, openWrtScript, "eval \"$cmd >> \\\"$stdout_log\\\" 2>> \\\"$stderr_log\\\" &\"")
+	assert.Contains(t, openWrtScript, "cmd='{{.Path|cmd}}{{range .Arguments}} {{.|cmd}}{{end}}'")
+	assert.Contains(t, openWrtScript, "sleep 1")
+
+	// Verify that linuxSysvScript contains eval execution and sleep check
+	assert.Contains(t, linuxSysvScript, "eval \"$cmd >> \\\"$stdout_log\\\" 2>> \\\"$stderr_log\\\" &\"")
+	assert.Contains(t, linuxSysvScript, "cmd='{{.Path|cmd}}{{range .Arguments}} {{.|cmd}}{{end}}'")
+	assert.Contains(t, linuxSysvScript, "sleep 1")
+}
+
+func TestServiceScript_TemplateRendering(t *testing.T) {
+	data := struct {
+		Path             string
+		Arguments        []string
+		Name             string
+		LogDirectory     string
+		WorkingDirectory string
+		EnvVars          map[string]string
+		Description      string
+		DisplayName      string
+	}{
+		Path:             "/root/HustWebAuth_linux_arm64",
+		Arguments:        []string{"service", "-f", "/root/HustWebAuth.yaml"},
+		Name:             "HustWebAuth",
+		LogDirectory:     "/tmp/HustWebAuth",
+		WorkingDirectory: "",
+		EnvVars:          map[string]string{"HOME": "/root"},
+		Description:      "A service used to implement Ruijie web authentication.",
+		DisplayName:      "HustWebAuth",
+	}
+
+	tmplFuncs := template.FuncMap{
+		"cmd": func(s string) string {
+			return `"` + strings.Replace(s, `"`, `\"`, -1) + `"`
+		},
+		"cmdEscape": func(s string) string {
+			return strings.Replace(s, " ", `\x20`, -1)
+		},
+	}
+
+	// Render openWrtScript
+	tOWrt, err := template.New("openwrt").Funcs(tmplFuncs).Parse(openWrtScript)
+	require.NoError(t, err)
+	var bufOWrt bytes.Buffer
+	err = tOWrt.Execute(&bufOWrt, data)
+	require.NoError(t, err)
+	renderedOWrt := bufOWrt.String()
+
+	assert.Contains(t, renderedOWrt, `cmd='"/root/HustWebAuth_linux_arm64" "service" "-f" "/root/HustWebAuth.yaml"'`)
+	assert.Contains(t, renderedOWrt, `eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"`)
+	assert.Contains(t, renderedOWrt, `name="HustWebAuth"`)
+	assert.Contains(t, renderedOWrt, `stdout_log="/tmp/HustWebAuth/$name.log"`)
+
+	// Render linuxSysvScript
+	tSysv, err := template.New("sysv").Funcs(tmplFuncs).Parse(linuxSysvScript)
+	require.NoError(t, err)
+	var bufSysv bytes.Buffer
+	err = tSysv.Execute(&bufSysv, data)
+	require.NoError(t, err)
+	renderedSysv := bufSysv.String()
+
+	assert.Contains(t, renderedSysv, `cmd='"/root/HustWebAuth_linux_arm64" "service" "-f" "/root/HustWebAuth.yaml"'`)
+	assert.Contains(t, renderedSysv, `eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"`)
+}
+
+func TestIsServiceControlCommand(t *testing.T) {
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+
+	tests := []struct {
+		name     string
+		args     []string
+		expected bool
+	}{
+		{
+			name:     "service start",
+			args:     []string{"HustWebAuth", "service", "start"},
+			expected: true,
+		},
+		{
+			name:     "service stop",
+			args:     []string{"HustWebAuth", "service", "stop"},
+			expected: true,
+		},
+		{
+			name:     "service status",
+			args:     []string{"HustWebAuth", "service", "status"},
+			expected: true,
+		},
+		{
+			name:     "service restart",
+			args:     []string{"HustWebAuth", "service", "restart"},
+			expected: true,
+		},
+		{
+			name:     "service install",
+			args:     []string{"HustWebAuth", "service", "install"},
+			expected: true,
+		},
+		{
+			name:     "service uninstall",
+			args:     []string{"HustWebAuth", "service", "uninstall"},
+			expected: true,
+		},
+		{
+			name:     "service daemon run (background service worker)",
+			args:     []string{"HustWebAuth", "service", "-f", "/root/HustWebAuth.yaml"},
+			expected: false,
+		},
+		{
+			name:     "root command run",
+			args:     []string{"HustWebAuth", "-c"},
+			expected: false,
+		},
+		{
+			name:     "login command run",
+			args:     []string{"HustWebAuth", "login"},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Args = tc.args
+			assert.Equal(t, tc.expected, isServiceControlCommand())
+		})
+	}
+}
+
+func TestNewSVCConfig_Options(t *testing.T) {
+	origCustomServiceName := customServiceName
+	origIface := iface
+	origLogDir := logDir
+	defer func() {
+		customServiceName = origCustomServiceName
+		iface = origIface
+		logDir = origLogDir
+	}()
+
+	customServiceName = "CustomAuth"
+	iface = "eth0"
+	logDir = "/tmp/testlog"
+
+	conf := newSVCConfig()
+	assert.Equal(t, "CustomAuth", conf.Name)
+	assert.Equal(t, "CustomAuth", conf.DisplayName)
+	assert.Contains(t, conf.Arguments, "service")
+	assert.Contains(t, conf.Arguments, "--name")
+	assert.Contains(t, conf.Arguments, "CustomAuth")
+
+	if sysType == "linux" {
+		assert.NotEmpty(t, conf.Option["SysvScript"])
+		scriptStr, ok := conf.Option["SysvScript"].(string)
+		assert.True(t, ok)
+		assert.Contains(t, scriptStr, "eval \"$cmd")
+	}
+}
