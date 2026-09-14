@@ -170,3 +170,41 @@ func TestNewSVCConfig_Options(t *testing.T) {
 		assert.Contains(t, scriptStr, "eval \"$cmd")
 	}
 }
+
+func TestReadTailLines(t *testing.T) {
+	tempDir := t.TempDir()
+	logPath := tempDir + "/test_tail.log"
+
+	// 1. Non-existent file
+	lines, err := readTailLines(tempDir+"/not_found.log", 10)
+	assert.Error(t, err)
+	assert.Nil(t, lines)
+
+	// 2. Empty file
+	err = os.WriteFile(logPath, []byte(""), 0644)
+	require.NoError(t, err)
+	lines, err = readTailLines(logPath, 10)
+	require.NoError(t, err)
+	assert.Empty(t, lines)
+
+	// 3. File with 5 lines, ask for 3
+	content := "line 1\nline 2\nline 3\nline 4\nline 5\n"
+	err = os.WriteFile(logPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	lines, err = readTailLines(logPath, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"line 3", "line 4", "line 5"}, lines)
+
+	// 4. File with 5 lines, ask for 10
+	lines, err = readTailLines(logPath, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"line 1", "line 2", "line 3", "line 4", "line 5"}, lines)
+}
+
+func TestGetServicePID(t *testing.T) {
+	// 1. Non-existent service PID
+	pid := getServicePID("non_existent_service_12345")
+	assert.Empty(t, pid)
+}
+

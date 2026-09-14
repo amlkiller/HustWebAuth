@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
@@ -201,8 +203,15 @@ var (
 			case service.StatusStopped:
 				log.Println("HustWebAuth service is stopped.")
 			case service.StatusRunning:
-				log.Println("HustWebAuth service is running.")
+				pid := getServicePID(s.String())
+				if pid != "" {
+					log.Printf("HustWebAuth service is running (PID: %s).\n", pid)
+				} else {
+					log.Println("HustWebAuth service is running.")
+				}
 			}
+
+			printRecentServiceLogs(s.String())
 		},
 	}
 
@@ -373,6 +382,146 @@ func svcStatus(s service.Service) (status service.Status, err error) {
 	}
 
 	return status, err
+}
+
+// readTailLines reads the last n non-empty lines from a file without loading the entire file.
+func readTailLines(filePath string, n int) ([]string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if fi.Size() == 0 {
+		return nil, nil
+	}
+
+	const maxReadSize = 64 * 1024
+	offset := int64(0)
+	readSize := fi.Size()
+	if readSize > maxReadSize {
+		offset = readSize - maxReadSize
+		readSize = maxReadSize
+	}
+
+	buf := make([]byte, readSize)
+	_, err = f.ReadAt(buf, offset)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	rawLines := strings.Split(string(buf), "\n")
+	if offset > 0 && len(rawLines) > 0 {
+		rawLines = rawLines[1:]
+	}
+
+	var lines []string
+	for _, l := range rawLines {
+		trimmed := strings.TrimRight(l, "\r")
+		if trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines, nil
+}
+
+// getServicePID returns the PID of the running service if available.
+func getServicePID(serviceName string) string {
+	pidFile := "/var/run/" + serviceName + ".pid"
+	data, err := os.ReadFile(pidFile)
+	if err == nil {
+		pid := strings.TrimSpace(string(data))
+		if pid != "" {
+			return pid
+		}
+	}
+	return ""
+}
+
+// printRecentServiceLogs displays recent log entries like systemctl status does.
+func printRecentServiceLogs(serviceName string) {
+	// 1. On systemd Linux systems, try journalctl
+	if sysType == "linux" && service.Platform() == "linux-systemd" {
+		code, out, err := RunCommand("journalctl", "-u", serviceName, "-n", "10", "--no-pager")
+		if err == nil && code == 0 {
+			outStr := strings.TrimSpace(string(out))
+			if outStr != "" {
+				fmt.Println("\nRecent journal logs (last 10 lines):")
+				for _, line := range strings.Split(outStr, "\n") {
+					fmt.Println("  " + line)
+				}
+				return
+			}
+		}
+	}
+
+	// 2. On OpenWrt, SysV, or file-logging environments, find relevant log files
+	var candidates []string
+
+	// Check configured log file
+	if logFile != "" {
+		targetPath := logFile
+		if !filepath.IsAbs(targetPath) {
+			targetPath = filepath.Join(logDir, targetPath)
+		}
+		if logRandom {
+			matches, _ := filepath.Glob(targetPath + "*")
+			var newestFile string
+			var newestMod time.Time
+			for _, m := range matches {
+				if fi, err := os.Stat(m); err == nil && fi.ModTime().After(newestMod) {
+					newestMod = fi.ModTime()
+					newestFile = m
+				}
+			}
+			if newestFile != "" {
+				candidates = append(candidates, newestFile)
+			}
+		} else if _, err := os.Stat(targetPath); err == nil {
+			candidates = append(candidates, targetPath)
+		}
+	}
+
+	// Standard service stdout and stderr logs
+	stdoutFile := filepath.Join(logDir, serviceName+".log")
+	stderrFile := filepath.Join(logDir, serviceName+".err")
+
+	for _, f := range []string{stdoutFile, stderrFile} {
+		alreadyAdded := false
+		for _, added := range candidates {
+			if added == f {
+				alreadyAdded = true
+				break
+			}
+		}
+		if !alreadyAdded {
+			if fi, err := os.Stat(f); err == nil && fi.Size() > 0 {
+				candidates = append(candidates, f)
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	for _, f := range candidates {
+		lines, err := readTailLines(f, 10)
+		if err == nil && len(lines) > 0 {
+			fmt.Printf("\nRecent logs from %s (last %d lines):\n", f, len(lines))
+			for _, line := range lines {
+				fmt.Println("  " + line)
+			}
+		}
+	}
 }
 
 // OpenWrt init script (compatible with OpenWrt, ImmortalWrt, and LEDE)
