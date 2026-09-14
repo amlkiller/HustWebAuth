@@ -313,25 +313,27 @@ var (
 			if IsOpenWrt() {
 				// On OpenWrt it is important to run disable command first
 				// as it will remove the symlink
-				_, err := runInitdCommand(s.String(), "disable")
-				if err != nil {
-					log.Fatalf("service: running init disable: %s", err)
+				if _, err := os.Stat("/etc/init.d/" + s.String()); err == nil {
+					_, err := runInitdCommand(s.String(), "disable")
+					if err != nil {
+						log.Printf("service: running init disable: %s", err)
+					}
 				}
 			}
 
-			status, err := svcStatus(s)
+			status, err := svcStatusFunc(s)
 			if err != nil {
 				log.Fatal(err)
 				return
 			}
 			if status == service.StatusRunning {
-				err = svcAction(s, "stop")
+				err = svcActionFunc(s, "stop")
 				if err != nil {
 					log.Println(err)
 				}
 			}
 
-			err = svcAction(s, "uninstall")
+			err = svcActionFunc(s, "uninstall")
 			if err != nil {
 				log.Fatal(err)
 				return
@@ -409,6 +411,11 @@ func svcStatus(s service.Service) (status service.Status, err error) {
 
 	return status, err
 }
+
+var (
+	svcActionFunc = svcAction
+	svcStatusFunc = svcStatus
+)
 
 // readTailLines reads the last n non-empty lines from a file without loading the entire file.
 func readTailLines(filePath string, n int) ([]string, error) {

@@ -37,9 +37,11 @@ func RunCommand(command string, arguments ...string) (code int, output []byte, e
 	return cmd.ProcessState.ExitCode(), out, nil
 }
 
+var isOpenWrtFunc = isOpenWrt
+
 // IsOpenWrt returns true if host OS is OpenWrt.
 func IsOpenWrt() (ok bool) {
-	return isOpenWrt()
+	return isOpenWrtFunc()
 }
 
 // RootDirFS returns the [fs.FS] rooted at the operating system's root.  On

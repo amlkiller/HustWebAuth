@@ -2,11 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"log"
 	"os"
 	"strings"
 	"testing"
 	"text/template"
 
+	"github.com/kardianos/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -231,5 +233,154 @@ func TestGetServicePID(t *testing.T) {
 	// 1. Non-existent service PID
 	pid := getServicePID("non_existent_service_12345")
 	assert.Empty(t, pid)
+}
+
+func TestServiceUninstall_OpenWrt_ScriptNotExist(t *testing.T) {
+	origIsOpenWrt := isOpenWrtFunc
+	origCustomServiceName := customServiceName
+	origStatusFunc := svcStatusFunc
+	origActionFunc := svcActionFunc
+	defer func() {
+		isOpenWrtFunc = origIsOpenWrt
+		customServiceName = origCustomServiceName
+		svcStatusFunc = origStatusFunc
+		svcActionFunc = origActionFunc
+	}()
+
+	isOpenWrtFunc = func() bool { return true }
+	customServiceName = "NonExistentService_12345"
+	_, err := os.Stat("/etc/init.d/" + customServiceName)
+	require.True(t, os.IsNotExist(err))
+
+	var actionsCalled []string
+	svcStatusFunc = func(s service.Service) (service.Status, error) {
+		actionsCalled = append(actionsCalled, "status")
+		return service.StatusStopped, nil
+	}
+	svcActionFunc = func(s service.Service, action string) error {
+		actionsCalled = append(actionsCalled, action)
+		return nil
+	}
+
+	var logBuf bytes.Buffer
+	origLogOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origLogOut)
+
+	uninstallCmd.Run(uninstallCmd, []string{})
+
+	output := logBuf.String()
+	assert.NotContains(t, output, "service: running init disable:")
+	assert.Contains(t, output, "HustWebAuth service has been uninstalled")
+	assert.Equal(t, []string{"status", "uninstall"}, actionsCalled)
+}
+
+func TestServiceUninstall_OpenWrt_DisableFailure_NoFatal(t *testing.T) {
+	// Look for an existing init.d script on linux (e.g. cron)
+	entries, err := os.ReadDir("/etc/init.d")
+	if err != nil || len(entries) == 0 {
+		t.Skip("skipping test: no /etc/init.d scripts found")
+	}
+
+	var existingScriptName string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			code, _, _ := RunCommand("sh", "-c", "/etc/init.d/"+entry.Name()+" disable")
+			if code != 0 {
+				existingScriptName = entry.Name()
+				break
+			}
+		}
+	}
+	if existingScriptName == "" {
+		t.Skip("skipping test: no files found in /etc/init.d that fail on disable")
+	}
+
+	origIsOpenWrt := isOpenWrtFunc
+	origCustomServiceName := customServiceName
+	origStatusFunc := svcStatusFunc
+	origActionFunc := svcActionFunc
+	defer func() {
+		isOpenWrtFunc = origIsOpenWrt
+		customServiceName = origCustomServiceName
+		svcStatusFunc = origStatusFunc
+		svcActionFunc = origActionFunc
+	}()
+
+	isOpenWrtFunc = func() bool { return true }
+	customServiceName = existingScriptName
+
+	// Ensure the script actually exists
+	_, err = os.Stat("/etc/init.d/" + customServiceName)
+	require.NoError(t, err)
+
+	var actionsCalled []string
+	svcStatusFunc = func(s service.Service) (service.Status, error) {
+		actionsCalled = append(actionsCalled, "status")
+		return service.StatusRunning, nil
+	}
+	svcActionFunc = func(s service.Service, action string) error {
+		actionsCalled = append(actionsCalled, action)
+		return nil
+	}
+
+	var logBuf bytes.Buffer
+	origLogOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origLogOut)
+
+	uninstallCmd.Run(uninstallCmd, []string{})
+
+	output := logBuf.String()
+	// Since the script in /etc/init.d does not support OpenWrt "disable" action,
+	// runInitdCommand fails, but it should log a warning via log.Printf instead of terminating with log.Fatalf
+	assert.Contains(t, output, "service: running init disable:")
+	assert.Contains(t, output, "HustWebAuth service has been uninstalled")
+	assert.Equal(t, []string{"status", "stop", "uninstall"}, actionsCalled)
+}
+
+func TestServiceUninstall_NonOpenWrt(t *testing.T) {
+	origIsOpenWrt := isOpenWrtFunc
+	origCustomServiceName := customServiceName
+	origStatusFunc := svcStatusFunc
+	origActionFunc := svcActionFunc
+	defer func() {
+		isOpenWrtFunc = origIsOpenWrt
+		customServiceName = origCustomServiceName
+		svcStatusFunc = origStatusFunc
+		svcActionFunc = origActionFunc
+	}()
+
+	isOpenWrtFunc = func() bool { return false }
+	customServiceName = "NonOpenWrtService_123"
+
+	var actionsCalled []string
+	svcStatusFunc = func(s service.Service) (service.Status, error) {
+		actionsCalled = append(actionsCalled, "status")
+		return service.StatusStopped, nil
+	}
+	svcActionFunc = func(s service.Service, action string) error {
+		actionsCalled = append(actionsCalled, action)
+		return nil
+	}
+
+	var logBuf bytes.Buffer
+	origLogOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origLogOut)
+
+	uninstallCmd.Run(uninstallCmd, []string{})
+
+	output := logBuf.String()
+	assert.NotContains(t, output, "service: running init disable:")
+	assert.Contains(t, output, "HustWebAuth service has been uninstalled")
+	assert.Equal(t, []string{"status", "uninstall"}, actionsCalled)
+}
+
+func TestRunInitdCommand_NonExistentScript(t *testing.T) {
+	code, err := runInitdCommand("non_existent_service_script_12345", "disable")
+	assert.Error(t, err)
+	assert.Equal(t, 127, code)
+	assert.Contains(t, err.Error(), "exit code 127")
 }
 
