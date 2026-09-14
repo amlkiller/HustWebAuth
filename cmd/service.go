@@ -667,7 +667,7 @@ const linuxSysvScript = `#!/bin/sh
 
 cmd='{{.Path|cmd}}{{range .Arguments}} {{.|cmd}}{{end}}'
 
-name=$(basename $(readlink -f $0))
+name="{{.Name}}"
 pid_file="/var/run/$name.pid"
 stdout_log="{{.LogDirectory}}/$name.log"
 stderr_log="{{.LogDirectory}}/$name.err"
@@ -683,7 +683,7 @@ get_pid() {
 }
 
 is_running() {
-    [ -f "$pid_file" ] && cat /proc/$(get_pid)/stat > /dev/null 2>&1
+    [ -f "${pid_file}" ] && [ -s "${pid_file}" ] && kill -0 "$(get_pid)" >/dev/null 2>&1
 }
 
 case "$1" in

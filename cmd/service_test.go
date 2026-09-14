@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"log"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"text/template"
@@ -14,15 +16,23 @@ import (
 )
 
 func TestServiceScript_EvalExecution(t *testing.T) {
-	// Verify that openWrtScript contains eval execution and sleep check
+	// Verify that openWrtScript contains eval execution, sleep check, name template, and POSIX is_running check
 	assert.Contains(t, openWrtScript, "eval \"$cmd >> \\\"$stdout_log\\\" 2>> \\\"$stderr_log\\\" &\"")
 	assert.Contains(t, openWrtScript, "cmd='{{.Path|cmd}}{{range .Arguments}} {{.|cmd}}{{end}}'")
 	assert.Contains(t, openWrtScript, "sleep 1")
+	assert.Contains(t, openWrtScript, `name="{{.Name}}"`)
+	assert.Contains(t, openWrtScript, `[ -f "${pid_file}" ] && [ -s "${pid_file}" ] && kill -0 "$(get_pid)" >/dev/null 2>&1`)
 
-	// Verify that linuxSysvScript contains eval execution and sleep check
+	// Verify that linuxSysvScript contains eval execution, sleep check, name template, and POSIX is_running check
 	assert.Contains(t, linuxSysvScript, "eval \"$cmd >> \\\"$stdout_log\\\" 2>> \\\"$stderr_log\\\" &\"")
 	assert.Contains(t, linuxSysvScript, "cmd='{{.Path|cmd}}{{range .Arguments}} {{.|cmd}}{{end}}'")
 	assert.Contains(t, linuxSysvScript, "sleep 1")
+	assert.Contains(t, linuxSysvScript, `name="{{.Name}}"`)
+	assert.Contains(t, linuxSysvScript, `[ -f "${pid_file}" ] && [ -s "${pid_file}" ] && kill -0 "$(get_pid)" >/dev/null 2>&1`)
+
+	// Verify that linuxSysvScript avoids readlink and /proc dependency
+	assert.NotContains(t, linuxSysvScript, "readlink")
+	assert.NotContains(t, linuxSysvScript, "/proc/")
 }
 
 func TestServiceScript_TemplateRendering(t *testing.T) {
@@ -67,6 +77,7 @@ func TestServiceScript_TemplateRendering(t *testing.T) {
 	assert.Contains(t, renderedOWrt, `eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"`)
 	assert.Contains(t, renderedOWrt, `name="HustWebAuth"`)
 	assert.Contains(t, renderedOWrt, `stdout_log="/tmp/HustWebAuth/$name.log"`)
+	assert.Contains(t, renderedOWrt, `kill -0 "$(get_pid)"`)
 
 	// Render linuxSysvScript
 	tSysv, err := template.New("sysv").Funcs(tmplFuncs).Parse(linuxSysvScript)
@@ -78,6 +89,65 @@ func TestServiceScript_TemplateRendering(t *testing.T) {
 
 	assert.Contains(t, renderedSysv, `cmd='"/root/HustWebAuth_linux_arm64" "service" "-f" "/root/HustWebAuth.yaml"'`)
 	assert.Contains(t, renderedSysv, `eval "$cmd >> \"$stdout_log\" 2>> \"$stderr_log\" &"`)
+	assert.Contains(t, renderedSysv, `name="HustWebAuth"`)
+	assert.Contains(t, renderedSysv, `stdout_log="/tmp/HustWebAuth/$name.log"`)
+	assert.Contains(t, renderedSysv, `kill -0 "$(get_pid)"`)
+	assert.NotContains(t, renderedSysv, "readlink")
+	assert.NotContains(t, renderedSysv, "/proc/")
+
+	// Test multi-WAN / custom service name rendering with suffix
+	dataMulti := data
+	dataMulti.Name = "HustWebAuth_eth0"
+	var bufSysvMulti bytes.Buffer
+	err = tSysv.Execute(&bufSysvMulti, dataMulti)
+	require.NoError(t, err)
+	renderedSysvMulti := bufSysvMulti.String()
+
+	assert.Contains(t, renderedSysvMulti, `name="HustWebAuth_eth0"`)
+	assert.Contains(t, renderedSysvMulti, `pid_file="/var/run/$name.pid"`)
+	assert.NotContains(t, renderedSysvMulti, "readlink")
+}
+
+func TestServiceScript_IsRunningPOSIX(t *testing.T) {
+	tempDir := t.TempDir()
+	pidFile := filepath.Join(tempDir, "test.pid")
+
+	shScript := `
+pid_file="` + pidFile + `"
+get_pid() {
+    cat "$pid_file"
+}
+is_running() {
+    [ -f "${pid_file}" ] && [ -s "${pid_file}" ] && kill -0 "$(get_pid)" >/dev/null 2>&1
+}
+if is_running; then
+    exit 0
+else
+    exit 1
+fi
+`
+
+	// Case 1: PID file does not exist -> exit code 1 (not running)
+	code, _, _ := RunCommand("sh", "-c", shScript)
+	assert.Equal(t, 1, code)
+
+	// Case 2: PID file exists but is empty -> exit code 1 (not running)
+	err := os.WriteFile(pidFile, []byte(""), 0644)
+	require.NoError(t, err)
+	code, _, _ = RunCommand("sh", "-c", shScript)
+	assert.Equal(t, 1, code)
+
+	// Case 3: PID file exists with non-existent process PID -> exit code 1 (not running)
+	err = os.WriteFile(pidFile, []byte("99999999"), 0644)
+	require.NoError(t, err)
+	code, _, _ = RunCommand("sh", "-c", shScript)
+	assert.Equal(t, 1, code)
+
+	// Case 4: PID file contains current running process PID -> exit code 0 (running)
+	err = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0644)
+	require.NoError(t, err)
+	code, _, _ = RunCommand("sh", "-c", shScript)
+	assert.Equal(t, 0, code)
 }
 
 func TestIsServiceControlCommand(t *testing.T) {
