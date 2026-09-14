@@ -278,3 +278,91 @@ func TestRunCycleWithContext_MultiWorker_ContextCancel(t *testing.T) {
 	}
 }
 
+func TestExampleYamlConfigParsing(t *testing.T) {
+	// 1. Locate example.yaml in repo root
+	examplePath := filepath.Join("..", "example.yaml")
+	require.FileExists(t, examplePath, "example.yaml must exist in the project root")
+
+	// 2. Validate parsing with an isolated Viper instance
+	v := viper.New()
+	v.SetConfigFile(examplePath)
+	v.SetConfigType("yaml")
+	err := v.ReadInConfig()
+	require.NoError(t, err, "Viper should parse example.yaml without error")
+
+	// Verify auth module
+	assert.Equal(t, "U202300001", v.GetString("auth.account"))
+	assert.Equal(t, "YourPasswordHere", v.GetString("auth.password"))
+	assert.Equal(t, "internet", v.GetString("auth.serviceType"))
+	assert.False(t, v.GetBool("auth.encrypt"))
+	assert.Equal(t, 4*time.Minute+59*time.Second, v.GetDuration("auth.cooldown"))
+	assert.Equal(t, 2*time.Hour, v.GetDuration("auth.maxCooldown"))
+	assert.True(t, v.GetBool("auth.rotation"))
+
+	var accs []Account
+	err = v.UnmarshalKey("auth.accounts", &accs)
+	require.NoError(t, err)
+	require.Len(t, accs, 2)
+	assert.Equal(t, "U202300001", accs[0].Account)
+	assert.Equal(t, "Password1", accs[0].Password)
+	assert.Equal(t, "internet", accs[0].ServiceType)
+	require.NotNil(t, accs[0].Encrypt)
+	assert.False(t, *accs[0].Encrypt)
+	assert.Equal(t, "U202300002", accs[1].Account)
+	assert.Equal(t, "Password2", accs[1].Password)
+
+	// Verify net module
+	assert.Equal(t, "", v.GetString("net.iface"))
+	assert.True(t, v.GetBool("net.insecure"))
+
+	// Verify interfaces list (Scenario 2)
+	var ifcs []InterfaceConfig
+	err = v.UnmarshalKey("interfaces", &ifcs)
+	require.NoError(t, err)
+	require.Len(t, ifcs, 2)
+	assert.Equal(t, "vwan1", ifcs[0].Iface)
+	assert.Equal(t, "http://connect.rom.miui.com/generate_204", ifcs[0].CheckURL)
+	assert.Equal(t, 4*time.Minute+59*time.Second, ifcs[0].Cooldown)
+	assert.Equal(t, 2*time.Hour, ifcs[0].MaxCooldown)
+	require.Len(t, ifcs[0].Accounts, 2)
+	assert.Equal(t, "vwan1_user1", ifcs[0].Accounts[0].Account)
+	assert.Equal(t, "vwan1_pass1", ifcs[0].Accounts[0].Password)
+
+	assert.Equal(t, "vwan2", ifcs[1].Iface)
+	assert.Equal(t, "http://connect.rom.miui.com/generate_204", ifcs[1].CheckURL)
+	assert.Equal(t, 4*time.Minute+59*time.Second, ifcs[1].Cooldown)
+	assert.Equal(t, 2*time.Hour, ifcs[1].MaxCooldown)
+	require.Len(t, ifcs[1].Accounts, 1)
+	assert.Equal(t, "vwan2_user1", ifcs[1].Accounts[0].Account)
+
+	// Verify check module
+	assert.Equal(t, "http://connect.rom.miui.com/generate_204", v.GetString("check.url"))
+	assert.Equal(t, 5*time.Second, v.GetDuration("check.timeout"))
+
+	// Verify redirect module
+	assert.Equal(t, "http://123.123.123.123", v.GetString("redirect.url"))
+
+	// Verify cycle module
+	assert.True(t, v.GetBool("cycle.enable"))
+	assert.Equal(t, 5*time.Minute, v.GetDuration("cycle.duration"))
+	assert.Equal(t, 3, v.GetInt("cycle.retry"))
+
+	// Verify daemon module
+	assert.False(t, v.GetBool("daemon.enable"))
+	assert.Equal(t, "/var/run/HustWebAuth_daemon.pid", v.GetString("daemon.pidFile"))
+
+	// Verify log module
+	assert.Equal(t, "/tmp/HustWebAuth", v.GetString("log.dir"))
+	assert.Equal(t, "HustWebAuth.log", v.GetString("log.file"))
+	assert.False(t, v.GetBool("log.random"))
+	assert.True(t, v.GetBool("log.append"))
+	assert.False(t, v.GetBool("log.connected"))
+	assert.False(t, v.GetBool("log.syslog"))
+
+	// Verify ping compatibility module
+	assert.Equal(t, "202.114.0.131", v.GetString("ping.ip"))
+	assert.Equal(t, 3, v.GetInt("ping.count"))
+	assert.Equal(t, 3*time.Second, v.GetDuration("ping.timeout"))
+	assert.True(t, v.GetBool("ping.privilege"))
+}
+
