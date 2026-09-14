@@ -189,18 +189,18 @@ func (p *AccountPool) MarkFailed(acc *ManagedAccount, reason string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.accounts) > 1 && p.rotation {
-		cd := p.CalculateCooldown(acc.ConsecutiveFails)
+	cd := p.CalculateCooldown(acc.ConsecutiveFails)
+	acc.ConsecutiveFails++
+	acc.LastFailReason = reason
+
+	if cd > 0 {
 		acc.CooldownUntil = time.Now().Add(cd)
-		acc.ConsecutiveFails++
 		log.Printf("[AccountPool] Account %q failed (%s). Entering exponential cooldown (%s, count=%d) until %s\n",
 			acc.Account.Account, reason, cd, acc.ConsecutiveFails, acc.CooldownUntil.Format("15:04:05"))
 	} else {
-		acc.ConsecutiveFails++
 		log.Printf("[AccountPool] Account %q failed (%s). Fail count: %d\n",
 			acc.Account.Account, reason, acc.ConsecutiveFails)
 	}
-	acc.LastFailReason = reason
 
 	if p.activeAccount == acc {
 		p.activeAccount = nil

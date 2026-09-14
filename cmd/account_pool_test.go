@@ -145,23 +145,75 @@ func TestAccountPool_KickedOffline_SingleAccount(t *testing.T) {
 	assert.Nil(t, pool.ActiveAccount())
 	assert.Equal(t, 1, cand.ConsecutiveFails)
 
-	// Single account should NOT enter cooldown, should be immediately retrievable for reconnection
+	// Single account should NOT enter cooldown on kick, should be immediately retrievable for reconnection
 	assert.True(t, cand.CooldownUntil.IsZero())
 	nextCand, err := pool.GetNextCandidate()
 	require.NoError(t, err)
 	assert.Equal(t, "singleUser", nextCand.Account.Account)
 
-	// Single account failure should also not block immediate re-candidate
-	pool.MarkFailed(nextCand, "temporary network error")
+	// Single account login failure MUST enter exponential cooldown
+	pool.MarkFailed(nextCand, "login credential incorrect")
 	assert.Equal(t, 2, nextCand.ConsecutiveFails)
-	assert.True(t, nextCand.CooldownUntil.IsZero())
+	assert.False(t, nextCand.CooldownUntil.IsZero())
+	assert.True(t, time.Now().Before(nextCand.CooldownUntil))
 
 	retryCand, err := pool.GetNextCandidate()
-	require.NoError(t, err)
-	assert.Equal(t, "singleUser", retryCand.Account.Account)
+	assert.Error(t, err)
+	assert.Nil(t, retryCand)
+	assert.Contains(t, err.Error(), "primary account \"singleUser\" is in cooldown")
 }
 
 func TestAccountPool_DefaultCooldown(t *testing.T) {
 	pool := NewAccountPool([]Account{{Account: "u", Password: "p"}}, 0, 0)
 	assert.Equal(t, 4*time.Minute+59*time.Second, pool.CalculateCooldown(0))
 }
+
+func TestAccountPool_SingleAccount_ExponentialBackoff(t *testing.T) {
+	accs := []Account{
+		{Account: "u1", Password: "p"},
+	}
+	base := 100 * time.Millisecond
+	max := 500 * time.Millisecond
+	pool := NewAccountPool(accs, base, max)
+
+	// First attempt
+	cand, err := pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "u1", cand.Account.Account)
+
+	// Fail 1: cooldown should be 100ms * 2^0 = 100ms
+	start := time.Now()
+	pool.MarkFailed(cand, "fail 1")
+	assert.Equal(t, 1, cand.ConsecutiveFails)
+	assert.True(t, cand.CooldownUntil.After(start))
+
+	// In cooldown
+	_, err = pool.GetNextCandidate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "primary account \"u1\" is in cooldown")
+
+	// Wait for cooldown to expire
+	time.Sleep(120 * time.Millisecond)
+
+	// Can get candidate again
+	cand, err = pool.GetNextCandidate()
+	require.NoError(t, err)
+
+	// Fail 2: cooldown should be 100ms * 2^1 = 200ms
+	start2 := time.Now()
+	pool.MarkFailed(cand, "fail 2")
+	assert.Equal(t, 2, cand.ConsecutiveFails)
+	assert.True(t, cand.CooldownUntil.After(start2.Add(150*time.Millisecond)))
+
+	// Still in cooldown after 100ms
+	time.Sleep(100 * time.Millisecond)
+	_, err = pool.GetNextCandidate()
+	assert.Error(t, err)
+
+	// After remaining wait, it expires
+	time.Sleep(120 * time.Millisecond)
+	cand, err = pool.GetNextCandidate()
+	require.NoError(t, err)
+	assert.Equal(t, "u1", cand.Account.Account)
+}
+
