@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -365,4 +369,60 @@ func TestExampleYamlConfigParsing(t *testing.T) {
 	assert.Equal(t, 3*time.Second, v.GetDuration("ping.timeout"))
 	assert.True(t, v.GetBool("ping.privilege"))
 }
+
+func TestRunSingleWorker_CooldownLogSuppression(t *testing.T) {
+	origCycleEnable := cycleEnable
+	origCycleDuration := cycleDuration
+	origCheckURL := checkURL
+	defer func() {
+		cycleEnable = origCycleEnable
+		cycleDuration = origCycleDuration
+		checkURL = origCheckURL
+		log.SetOutput(os.Stderr)
+	}()
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+
+	// Server returns HTTP 200 with redirect to login portal
+	portalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `<script>location.href="http://%s/eportal/index.jsp?wlanuserip=1.1.1.1";</script>`, r.Host)
+	}))
+	defer portalServer.Close()
+
+	cycleEnable = true
+	cycleDuration = 15 * time.Millisecond
+	checkURL = portalServer.URL
+
+	// Configure an account that enters cooldown on failure
+	cfg := InterfaceConfig{
+		Iface:       "",
+		CheckURL:    portalServer.URL,
+		Cooldown:    10 * time.Minute,
+		MaxCooldown: 10 * time.Minute,
+		Accounts: []Account{
+			{Account: "cooldownUser", Password: "wrongPassword"},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		runSingleWorker(ctx, cfg, false)
+		close(done)
+	}()
+
+	// Wait for multiple ticks (initial failure + several cooldown ticks)
+	time.Sleep(120 * time.Millisecond)
+	cancel()
+	<-done
+
+	out := logBuf.String()
+	// Count occurrences of "waiting for cooldown to expire..."
+	count := strings.Count(out, "waiting for cooldown to expire...")
+	assert.Equal(t, 1, count, "cooldown message should be logged exactly once during the cooldown period, got: %d\nLog:\n%s", count, out)
+}
+
 

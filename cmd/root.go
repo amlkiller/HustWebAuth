@@ -332,11 +332,15 @@ func runSingleWorker(ctx context.Context, cfg InterfaceConfig, isMultiWorker boo
 	}
 
 	retryCount := 0
+	inCooldownLogged := false
 	res, err := LoginWithInterface(cfg.Iface, pool, register, cfg.GetCheckURL())
 	if err != nil {
 		if cycleEnable {
 			if strings.Contains(err.Error(), "in cooldown") {
-				log.Printf("[%s] %v, waiting for cooldown in cycle...\n", tag, err)
+				if !inCooldownLogged {
+					log.Printf("[%s] %v, waiting for cooldown in cycle...\n", tag, err)
+					inCooldownLogged = true
+				}
 			} else if cycleRetry < 0 {
 				log.Printf("[%s] Login failed, Err: %v\n", tag, err)
 				log.Printf("[%s] Login retrying...\n", tag)
@@ -376,23 +380,30 @@ func runSingleWorker(ctx context.Context, cfg InterfaceConfig, isMultiWorker boo
 				res, err := LoginWithInterface(cfg.Iface, pool, false, cfg.GetCheckURL())
 				if err != nil {
 					if strings.Contains(err.Error(), "in cooldown") {
-						log.Printf("[%s] %v, waiting for cooldown to expire...\n", tag, err)
-					} else if cycleRetry < 0 {
-						log.Printf("[%s] Login failed, Err: %v\n", tag, err)
-						log.Printf("[%s] Login retrying...\n", tag)
-					} else if retryCount < cycleRetry {
-						retryCount++
-						log.Printf("[%s] Login failed, Err: %v\n", tag, err)
-						log.Printf("[%s] Login retry %d times after %s\n", tag, retryCount, cycleDuration)
-					} else {
-						log.Printf("[%s] Login failed, Err: %v\n", tag, err)
-						log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
-						if !isMultiWorker {
-							os.Exit(1)
+						if !inCooldownLogged {
+							log.Printf("[%s] %v, waiting for cooldown to expire...\n", tag, err)
+							inCooldownLogged = true
 						}
-						return
+					} else {
+						inCooldownLogged = false
+						if cycleRetry < 0 {
+							log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+							log.Printf("[%s] Login retrying...\n", tag)
+						} else if retryCount < cycleRetry {
+							retryCount++
+							log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+							log.Printf("[%s] Login retry %d times after %s\n", tag, retryCount, cycleDuration)
+						} else {
+							log.Printf("[%s] Login failed, Err: %v\n", tag, err)
+							log.Printf("[%s] Exceed the maximum number of retries, worker stopped!\n", tag)
+							if !isMultiWorker {
+								os.Exit(1)
+							}
+							return
+						}
 					}
 				} else {
+					inCooldownLogged = false
 					if res != "" {
 						log.Printf("[%s] %s\n", tag, res)
 					}
