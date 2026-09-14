@@ -1,4 +1,5 @@
-export PATH := $(GOPATH)/bin:$(PATH)
+export GOROOT := $(shell go env GOROOT)
+export PATH := $(GOROOT)/bin:$(GOPATH)/bin:$(PATH)
 export GO111MODULE=on
 LDFLAGS := -s -w
 
